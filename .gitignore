@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+dataset/images/
+dataset/masks/
+
+.DS_Store
+Thumbs.db
