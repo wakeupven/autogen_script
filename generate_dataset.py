@@ -15,7 +15,7 @@ import argparse
 import warnings
 from typing import List, Tuple, Optional
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 from shapely.geometry import Polygon, LineString, Point, box, MultiPolygon, JOIN_STYLE
 from shapely.ops import unary_union
 from tqdm import tqdm
@@ -25,7 +25,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module="shapely")
 # =============================================================================
 # ПАРАМЕТРЫ
 # =============================================================================
-NUM_IMAGES = 5000
+NUM_IMAGES = 10
 SEED = 42
 MIN_CANVAS = 1200
 MAX_CANVAS = 2500
@@ -58,6 +58,18 @@ WINDOW_PROB = 0.5       # Вероятность, что случайный пр
                         # Первый проём всегда дверь (гарантия хотя бы одной двери).
 CANVAS_MARGIN = 300
 
+# Параметры простановки размеров стен
+SCALE_MM_PER_PX = 10         # 1 пиксель = 10 мм
+DIM_OFFSET = 35              # отступ размерной линии от края стены (px)
+DIM_TICK_SIZE = 8            # размер засечки (px)
+DIM_TEXT_SIZE = 14           # размер шрифта текста размеров
+DIM_MIN_LENGTH = 30          # мин. длина стены для простановки (px)
+
+# Параметры штриховки несущих стен
+HATCH_LINE_WIDTH = 1         # толщина линии штриховки (px)
+HATCH_COLOR = (60, 60, 60)   # цвет штриховки на плане (тёмно-серый)
+LOAD_BEARING_INTERIOR_PROB = 0.3  # вероятность несущей для внутренней стены
+
 OUTPUT_DIR = "dataset"
 IMAGES_DIR = os.path.join(OUTPUT_DIR, "images")
 MASKS_DIR = os.path.join(OUTPUT_DIR, "masks")
@@ -79,6 +91,8 @@ M_WIND = (255, 0, 0)
 M_DOOR = (255, 127, 80)
 M_DOORW = (128, 0, 128)
 M_WINDW = (0, 255, 0)
+M_DIM = (255, 255, 255)  # размерные элементы в маске
+M_WALL_HATCH = (255, 128, 0)  # несущие стены в маске (оранжевый)
 
 # =============================================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -136,10 +150,10 @@ def draw_shapely_poly(draw, polygon, fill, outline=None, width=1):
 # =============================================================================
 def generate_rooms(
     canvas_w: int, canvas_h: int, wall_t: int, num_rooms: int
-) -> Tuple[List[Polygon], List[Tuple[Tuple[float, float], Tuple[float, float]]]]:
+) -> Tuple[List[Polygon], List[Tuple[Tuple[float, float], Tuple[float, float]]], List[dict]]:
     """
-    Сгенерировать комнаты (interior) и стены (midlines) через BSP.
-    Возвращает (room_polygons, wall_midlines).
+    Сгенерировать комнаты (interior), стены (midlines) и инфо о внешних стенах для размеров.
+    Возвращает (room_polygons, wall_midlines, wall_info).
     """
     margin = CANVAS_MARGIN
     half_t = wall_t / 2.0
@@ -218,33 +232,43 @@ def generate_rooms(
             edges[key] = edges.get(key, 0) + 1
 
     wall_midlines = []
+    wall_info = []
     for (etype, ex1, ey1, ex2, ey2), count in edges.items():
         ext = wall_t
         if etype == "h":
             if count >= 2:
-                wall_midlines.append(((ex1 - ext, ey1), (ex2 + ext, ey1)))
+                midline = ((ex1 - ext, ey1), (ex2 + ext, ey1))
+                wall_midlines.append(midline)
+                wall_info.append({"midline": midline, "normal": (0, -1)})
             else:
                 is_top = any(abs(ey1 - ry1) < 1 for _, ry1, _, _ in parts)
                 if is_top:
-                    wall_midlines.append(((ex1 - ext, ey1 - half_t),
-                                          (ex2 + ext, ey1 - half_t)))
+                    midline = ((ex1 - ext, ey1 - half_t), (ex2 + ext, ey1 - half_t))
+                    normal = (0, -1)
                 else:
-                    wall_midlines.append(((ex1 - ext, ey1 + half_t),
-                                          (ex2 + ext, ey1 + half_t)))
+                    midline = ((ex1 - ext, ey1 + half_t), (ex2 + ext, ey1 + half_t))
+                    normal = (0, 1)
+                wall_midlines.append(midline)
+                wall_info.append({"midline": midline, "normal": normal})
         else:
             if count >= 2:
-                wall_midlines.append(((ex1, ey1 - ext), (ex2, ey2 + ext)))
+                midline = ((ex1, ey1 - ext), (ex2, ey2 + ext))
+                wall_midlines.append(midline)
+                wall_info.append({"midline": midline, "normal": (-1, 0)})
             else:
                 is_left = any(abs(ex1 - rx1) < 1 for rx1, _, _, _ in parts)
                 if is_left:
-                    wall_midlines.append(((ex1 - half_t, ey1 - ext),
-                                          (ex1 - half_t, ey2 + ext)))
+                    midline = ((ex1 - half_t, ey1 - ext), (ex1 - half_t, ey2 + ext))
+                    normal = (-1, 0)
                 else:
-                    wall_midlines.append(((ex1 + half_t, ey1 - ext),
-                                          (ex1 + half_t, ey2 + ext)))
+                    midline = ((ex1 + half_t, ey1 - ext), (ex1 + half_t, ey2 + ext))
+                    normal = (1, 0)
+                wall_midlines.append(midline)
+                wall_info.append({"midline": midline, "normal": normal})
 
     wall_midlines = [(a, b) for a, b in wall_midlines if dist(a, b) > 50]
-    return rooms, wall_midlines
+    wall_info = [w for w in wall_info if dist(w["midline"][0], w["midline"][1]) > 50]
+    return rooms, wall_midlines, wall_info
 
 # =============================================================================
 # РАЗМЕЩЕНИЕ ДВЕРЕЙ И ОКОН
@@ -473,15 +497,15 @@ def door_clear(
 # =============================================================================
 def generate_plan(
     canvas_w: int, canvas_h: int
-) -> Tuple[List[Polygon], List[Opening], int, int]:
-    """Сгенерировать один план: комнаты, проёмы, wall_t, num_rooms."""
+) -> Tuple[List[Polygon], List[Opening], List[Tuple[Tuple[float, float], Tuple[float, float]]], List[dict], int, int]:
+    """Сгенерировать один план: комнаты, проёмы, wall_midlines, wall_info, wall_t, num_rooms."""
     wall_t = rand_wall_t()
     num_rooms = random.randint(MIN_ROOMS, MAX_ROOMS)
     num_openings = random.randint(MIN_OPENINGS, MAX_OPENINGS)
 
-    rooms, wall_midlines = generate_rooms(canvas_w, canvas_h, wall_t, num_rooms)
+    rooms, wall_midlines, wall_info = generate_rooms(canvas_w, canvas_h, wall_t, num_rooms)
     openings = place_openings(wall_midlines, wall_t, num_openings)
-    return rooms, openings, wall_t, num_rooms
+    return rooms, openings, wall_midlines, wall_info, wall_t, num_rooms
 
 
 # =============================================================================
@@ -509,11 +533,241 @@ def draw_mask_outer_buffer(draw, rooms, wall_t):
     return outer
 
 
+# =============================================================================
+# ПРОСТАНОВКА РАЗМЕРОВ СТЕН
+# =============================================================================
+try:
+    _dim_font = ImageFont.truetype("arial.ttf", DIM_TEXT_SIZE)
+except IOError:
+    try:
+        _dim_font = ImageFont.truetype("DejaVuSans.ttf", DIM_TEXT_SIZE)
+    except IOError:
+        _dim_font = ImageFont.load_default()
+
+
+def draw_dimensions(
+    draw: ImageDraw.ImageDraw,
+    wall_info: List[dict],
+    wall_t: int,
+    scale_mm_per_px: float,
+    line_color: Tuple[int, int, int],
+    text_color: Tuple[int, int, int],
+    img_size: Tuple[int, int],
+) -> None:
+    """Нарисовать размерные линии с засечками и текст длины для внешних стен."""
+    for w in wall_info:
+        (x1, y1), (x2, y2) = w["midline"]
+        nx, ny = w["normal"]
+        length_px = dist((x1, y1), (x2, y2))
+        if length_px < DIM_MIN_LENGTH:
+            continue
+        # Длина стены в мм
+        length_mm = round(length_px * scale_mm_per_px)
+
+        # Смещение размерной линии наружу
+        offset = wall_t / 2.0 + DIM_OFFSET
+        # Выносные линии от концов стены перпендикулярно наружу
+        ex1 = x1 + nx * offset
+        ey1 = y1 + ny * offset
+        ex2 = x2 + nx * offset
+        ey2 = y2 + ny * offset
+
+        # Ограничиваем координаты в пределах изображения
+        margin = 5
+        ex1 = max(margin, min(ex1, img_size[0] - margin))
+        ey1 = max(margin, min(ey1, img_size[1] - margin))
+        ex2 = max(margin, min(ex2, img_size[0] - margin))
+        ey2 = max(margin, min(ey2, img_size[1] - margin))
+
+        # Выносные линии (от концов стены до размерной линии)
+        draw.line([(int(x1), int(y1)), (int(ex1), int(ey1))], fill=line_color, width=1)
+        draw.line([(int(x2), int(y2)), (int(ex2), int(ey2))], fill=line_color, width=1)
+
+        # Размерная линия между выносными
+        draw.line([(int(ex1), int(ey1)), (int(ex2), int(ey2))], fill=line_color, width=1)
+
+        # Направление размерной линии (единичный вектор)
+        dx = ex2 - ex1
+        dy = ey2 - ey1
+        dl = math.hypot(dx, dy)
+        if dl < 1:
+            continue
+        ux, uy = dx / dl, dy / dl
+
+        # Перпендикуляр для засечек
+        px, py = -uy, ux
+        half_tick = DIM_TICK_SIZE / 2.0
+
+        # Засечки на концах размерной линии (перпендикулярные штрихи)
+        draw.line([(int(ex1 - px * half_tick), int(ey1 - py * half_tick)),
+                   (int(ex1 + px * half_tick), int(ey1 + py * half_tick))],
+                  fill=line_color, width=1)
+        draw.line([(int(ex2 - px * half_tick), int(ey2 - py * half_tick)),
+                   (int(ex2 + px * half_tick), int(ey2 + py * half_tick))],
+                  fill=line_color, width=1)
+
+        # Текст размера над размерной линией
+        text = str(length_mm)
+        bbox = draw.textbbox((0, 0), text, font=_dim_font)
+        tw = bbox[2] - bbox[0]
+        th = bbox[3] - bbox[1]
+
+        # Центр размерной линии + смещение вдоль normal для текста
+        cx = (ex1 + ex2) / 2.0
+        cy = (ey1 + ey2) / 2.0
+        text_offset = DIM_TICK_SIZE * 0.5 + 2
+        tx = cx + nx * text_offset - tw / 2.0
+        ty = cy + ny * text_offset - th / 2.0
+        draw.text((int(tx), int(ty)), text, fill=text_color, font=_dim_font)
+
+
+# =============================================================================
+# ШТРИХОВКА НЕСУЩИХ СТЕН
+# =============================================================================
+def classify_walls(
+    wall_info: List[dict],
+    rooms: List[Polygon],
+    wall_t: float,
+) -> None:
+    """Классифицировать стены на внешние (периметр) и внутренние.
+    Добавляет ключ 'is_exterior' в каждый словарь wall_info.
+    Внешняя = нормаль выходит за пределы union комнат, buffered на wall_t.
+    """
+    if len(rooms) == 1:
+        room_union = rooms[0]
+    else:
+        room_union = unary_union(rooms)
+    outer = room_union.buffer(wall_t, join_style=2, mitre_limit=5.0)
+
+    for w in wall_info:
+        (x1, y1), (x2, y2) = w["midline"]
+        nx, ny = w["normal"]
+        mx = (x1 + x2) / 2.0
+        my = (y1 + y2) / 2.0
+
+        # Точка на расстоянии wall_t вдоль normal от средней линии
+        test = Point(mx + nx * wall_t, my + ny * wall_t)
+
+        # Если точка снаружи outer (комнаты + стены) — стена внешняя
+        w["is_exterior"] = not outer.covers(test)
+
+
+def get_load_bearing_regions(
+    rooms: List[Polygon],
+    wall_info: List[dict],
+    wall_t: float,
+) -> Tuple[List[Polygon], List[Polygon]]:
+    """Определить несущие стены и их регионы.
+    Возвращает (load_bearing_regions, non_load_bearing_regions) — списки полигонов.
+    """
+    from shapely.geometry import Polygon as ShapelyPolygon, MultiPolygon
+
+    # Сначала классифицируем стены геометрически
+    classify_walls(wall_info, rooms, wall_t)
+
+    wall_poly = compute_wall_polygon(rooms, wall_t)
+    half_t = wall_t / 2.0
+
+    lb_regions: List[Polygon] = []
+    nlb_regions: List[Polygon] = []
+
+    for w in wall_info:
+        (x1, y1), (x2, y2) = w["midline"]
+        nx, ny = w["normal"]
+        is_ext = w["is_exterior"]
+
+        is_lb = is_ext or (not is_ext and random.random() < LOAD_BEARING_INTERIOR_PROB)
+
+        # Прямоугольник стены: midline + wall_t/2 в обе стороны вдоль normal
+        pts = [
+            (x1 + nx * half_t, y1 + ny * half_t),
+            (x2 + nx * half_t, y2 + ny * half_t),
+            (x2 - nx * half_t, y2 - ny * half_t),
+            (x1 - nx * half_t, y1 - ny * half_t),
+        ]
+        seg_poly = ShapelyPolygon(pts)
+        clipped = seg_poly.intersection(wall_poly)
+
+        if clipped.is_empty:
+            continue
+        if clipped.geom_type == "MultiPolygon":
+            for part in clipped.geoms:
+                if is_lb:
+                    lb_regions.append(part)
+                else:
+                    nlb_regions.append(part)
+        elif clipped.geom_type == "Polygon":
+            if is_lb:
+                lb_regions.append(clipped)
+            else:
+                nlb_regions.append(clipped)
+
+    return lb_regions, nlb_regions
+
+
+def draw_hatching(
+    draw: ImageDraw.ImageDraw,
+    regions: List[Polygon],
+    wall_t: float,
+    color: Tuple[int, int, int],
+    line_width: int,
+) -> None:
+    """Нарисовать диагональную штриховку (45°) для заданных регионов стен."""
+    from shapely.geometry import LineString, MultiLineString
+
+    inv_sqrt2 = 0.7071067811865475
+
+    for poly in regions:
+        minx, miny, maxx, maxy = poly.bounds
+        w = maxx - minx
+        h = maxy - miny
+        step = max(4, wall_t * 0.3)
+        if w < 1 and h < 1:
+            continue
+
+        # Диагональ bbox — достаточно, чтобы линия гарантированно пересекла полигон
+        diag = math.sqrt(w * w + h * h)
+        if diag < 1:
+            continue
+        span = diag * 2.0  # запас, чтобы линия выходила за пределы полигона
+
+        num_lines = int(diag / step) + 2
+
+        for i in range(num_lines):
+            perp = (i - num_lines * 0.5) * step
+            cx = (minx + maxx) / 2.0 + perp * (-inv_sqrt2)
+            cy = (miny + maxy) / 2.0 + perp * inv_sqrt2
+
+            # Линия вдоль направления (1,1) с центром в (cx, cy)
+            p1 = (cx - span * inv_sqrt2, cy - span * inv_sqrt2)
+            p2 = (cx + span * inv_sqrt2, cy + span * inv_sqrt2)
+
+            line = LineString([p1, p2])
+            clipped = poly.intersection(line)
+
+            if clipped.is_empty:
+                continue
+
+            segments = []
+            if clipped.geom_type == "LineString":
+                segments = [list(clipped.coords)]
+            elif clipped.geom_type == "MultiLineString":
+                segments = [list(ls.coords) for ls in clipped.geoms]
+
+            for coords in segments:
+                for j in range(len(coords) - 1):
+                    draw.line([(int(coords[j][0]), int(coords[j][1])),
+                               (int(coords[j+1][0]), int(coords[j+1][1]))],
+                              fill=color, width=line_width)
+
+
 def draw_plan(
     img: Image.Image,
     rooms: List[Polygon],
     openings: List[Opening],
     wall_t: int,
+    wall_info: List[dict],
+    lb_regions: List[Polygon],
 ) -> None:
     """Нарисовать основной план (цвета BG/WALL/ROOM/DOOR)."""
     draw = ImageDraw.Draw(img)
@@ -528,6 +782,9 @@ def draw_plan(
 
     # 2. Стены (через внешний буфер — комнаты временно закрашиваются)
     outer = draw_outer_buffer(draw, rooms, wall_t, wall_fill)
+
+    # 2.5 Штриховка несущих стен (поверх стен, обрезается комнатами на шаге 3)
+    draw_hatching(draw, lb_regions, wall_t, HATCH_COLOR, HATCH_LINE_WIDTH)
 
     # 3. Перерисовка комнат (прорезаем дыры в стенах)
     for room in rooms:
@@ -637,6 +894,9 @@ def draw_plan(
             i2 = (op.p2[0] + nx * (-half_spread + shift), op.p2[1] + ny * (-half_spread + shift))
             draw.line([i1, i2], fill=WIND_COL, width=line_w)
 
+    # 9. Размеры стен
+    draw_dimensions(draw, wall_info, wall_t, SCALE_MM_PER_PX, (0, 0, 0), (0, 0, 0), img.size)
+
 
 # =============================================================================
 # РИСОВАНИЕ МАСКИ (СЕМАНТИЧЕСКАЯ СЕГМЕНТАЦИЯ)
@@ -646,8 +906,10 @@ def draw_mask(
     rooms: List[Polygon],
     openings: List[Opening],
     wall_t: int,
+    wall_info: List[dict],
+    lb_regions: List[Polygon],
 ) -> None:
-    """Нарисовать маску (цвета M_ROOM/M_WALL/M_DOOR/M_DOORW/M_WIND/M_WINDW)."""
+    """Нарисовать маску (цвета M_ROOM/M_WALL/M_WALL_HATCH/M_DOOR/M_DOORW/M_WIND/M_WINDW)."""
     draw = ImageDraw.Draw(mask)
 
     # 1. Заливка комнат
@@ -660,6 +922,10 @@ def draw_mask(
     # 3. Перерисовка комнат (прорезаем дыры в стенах)
     for room in rooms:
         draw_shapely_poly(draw, room, fill=M_ROOM, outline=None)
+
+    # 3.5 Несущие стены — перерисовка оранжевым (M_WALL_HATCH) поверх жёлтого M_WALL
+    for region in lb_regions:
+        draw_shapely_poly(draw, region, fill=M_WALL_HATCH, outline=None)
 
     # 4. Проёмы поверх стен
     drawn_swings: List[Polygon] = []
@@ -744,6 +1010,9 @@ def draw_mask(
                 i1 = (op.p1[0] + nx * (-half_spread + shift), op.p1[1] + ny * (-half_spread + shift))
                 i2 = (op.p2[0] + nx * (-half_spread + shift), op.p2[1] + ny * (-half_spread + shift))
                 draw.line([i1, i2], fill=M_WIND, width=line_w)
+
+    # 5. Размеры стен в маске
+    draw_dimensions(draw, wall_info, wall_t, SCALE_MM_PER_PX, M_DIM, M_DIM, mask.size)
 
 
 # =============================================================================
@@ -854,15 +1123,18 @@ def main():
         canvas_w = random.randint(MIN_CANVAS, MAX_CANVAS)
         canvas_h = random.randint(MIN_CANVAS, MAX_CANVAS)
 
-        rooms, openings, wall_t, num_rooms = generate_plan(canvas_w, canvas_h)
+        rooms, openings, wall_midlines, wall_info, wall_t, num_rooms = generate_plan(canvas_w, canvas_h)
+
+        # Регионы несущих стен (один раз для плана и маски)
+        lb_regions, _ = get_load_bearing_regions(rooms, wall_info, wall_t)
 
         # Основное изображение
         img = Image.new("RGB", (canvas_w, canvas_h), BG)
-        draw_plan(img, rooms, openings, wall_t)
+        draw_plan(img, rooms, openings, wall_t, wall_info, lb_regions)
 
         # Маска (чистая, без аугментаций)
         mask = Image.new("RGB", (canvas_w, canvas_h), (0, 0, 0))
-        draw_mask(mask, rooms, openings, wall_t)
+        draw_mask(mask, rooms, openings, wall_t, wall_info, lb_regions)
 
         # Применяем артефакты сканирования только к изображению
         img, augs = apply_scanning_artifacts(img, pipeline)
