@@ -13,7 +13,7 @@ import math
 import sys
 import argparse
 import warnings
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Set
 
 from PIL import Image, ImageDraw, ImageFont
 from shapely.geometry import Polygon, LineString, Point, box, MultiPolygon, JOIN_STYLE
@@ -64,6 +64,7 @@ DIM_OFFSET = 35              # отступ размерной линии от �
 DIM_TICK_SIZE = 8            # размер засечки (px)
 DIM_TEXT_SIZE = 14           # размер шрифта текста размеров
 DIM_MIN_LENGTH = 30          # мин. длина стены для простановки (px)
+DOOR_DIM_EXTRA_MARGIN = 20   # доп. отступ размерной линии, если дверь открывается в её сторону
 
 # Параметры штриховки несущих стен
 HATCH_LINE_WIDTH = 1         # толщина линии штриховки (px)
@@ -83,6 +84,14 @@ STAIRWELL_SIZE = 180         # размер лестнично-лифтовог�
 OUTPUT_DIR = "dataset"
 IMAGES_DIR = os.path.join(OUTPUT_DIR, "images")
 MASKS_DIR = os.path.join(OUTPUT_DIR, "masks")
+
+# Параметры Scribbles (рукописные пометки на изображении)
+SCRIBBLES_ENABLED = True
+SCRIBBLES_PROB = 0.3
+
+# Параметры WaterMark (водяной знак)
+WATERMARK_ENABLED = False
+WATERMARK_PROB = 0.0
 
 # =============================================================================
 # ЦВЕТА
@@ -298,6 +307,7 @@ class Opening:
         self.p2 = p2
         self.wall_p1 = wall_p1
         self.wall_p2 = wall_p2
+        self.swing_dir: Optional[Tuple[float, float]] = None
 
 def place_openings(
     wall_midlines: List[Tuple[Tuple[float, float], Tuple[float, float]]],
@@ -558,27 +568,190 @@ except IOError:
         _dim_font = ImageFont.load_default()
 
 
+def compute_extra_offset_map(
+    wall_info: List[dict],
+    openings: List[Opening],
+    rooms: List[Polygon],
+    wall_t: float,
+    room_union: Polygon,
+    wall_polygon: Polygon,
+) -> Dict[int, float]:
+    """Вернуть словарь {idx: extra_offset} для стен, где дверь открывается
+    в ту же сторону, что и размерная линия.
+    Выноска отодвигается так, чтобы быть на DOOR_DIM_EXTRA_MARGIN от дуги двери.
+    Также добавляет offset коллинеарным стенам, лежащим на одной линии."""
+    extra: Dict[int, float] = {}
+    _EPS = 1e-3
+
+    # 1. Собираем стены-источники с макс. шириной двери
+    src_map: Dict[int, float] = {}  # wall_idx -> max door width (dw)
+    for op in openings:
+        if op.type != "door" or op.swing_dir is None:
+            continue
+        if op.wall_idx >= len(wall_info):
+            continue
+        nx, ny = wall_info[op.wall_idx]["normal"]
+        sx, sy = op.swing_dir
+        if nx * sx + ny * sy > 0.5:
+            dw = math.hypot(op.p2[0] - op.p1[0], op.p2[1] - op.p1[1])
+            if dw > src_map.get(op.wall_idx, 0):
+                src_map[op.wall_idx] = dw
+
+    if not src_map:
+        return extra
+
+    base_offset = wall_t / 2.0 + DIM_OFFSET
+    n = len(wall_info)
+    for src_idx, max_dw in src_map.items():
+        (sx1, sy1), (sx2, sy2) = wall_info[src_idx]["midline"]
+        ny = wall_info[src_idx]["normal"][1]
+        is_h = abs(ny) > 0.5
+
+        # Целевое положение выноски: дуга двери + отступ
+        target = max_dw + DOOR_DIM_EXTRA_MARGIN
+        need = max(0.0, target - base_offset)
+
+        for i in range(n):
+            (ix1, iy1), (ix2, iy2) = wall_info[i]["midline"]
+            is_h2 = abs(iy1 - iy2) < _EPS
+            if is_h2 != is_h:
+                continue
+
+            if is_h:
+                if abs(iy1 - sy1) > _EPS:
+                    continue
+                lo = max(min(ix1, ix2), min(sx1, sx2))
+                hi = min(max(ix1, ix2), max(sx1, sx2))
+            else:
+                if abs(ix1 - sx1) > _EPS:
+                    continue
+                lo = max(min(iy1, iy2), min(sy1, sy2))
+                hi = min(max(iy1, iy2), max(sy1, sy2))
+
+            if hi - lo >= -1 and need > extra.get(i, 0):
+                extra[i] = need
+
+    return extra
+
+
+def _count_walls_per_side(wall_info: List[dict]) -> Set[int]:
+    """Для каждой стены подсчитать количество пересекающих стен с каждой стороны нормали.
+    Возвращает {idx: use_flipped} — True, если стен больше с противоположной стороны."""
+    flip_map: Set[int] = set()
+    n = len(wall_info)
+    _EPS = 1e-3
+
+    for i in range(n):
+        (x1, y1), (x2, y2) = wall_info[i]["midline"]
+        nx, ny = wall_info[i]["normal"]
+        is_h = abs(ny) > 0.5
+
+        cnt_norm = 0
+        cnt_opp = 0
+
+        wx_min, wx_max = min(x1, x2), max(x1, x2)
+        wy_min, wy_max = min(y1, y2), max(y1, y2)
+
+        for j in range(n):
+            if j == i:
+                continue
+            (vx1, vy1), (vx2, vy2) = wall_info[j]["midline"]
+            is_h2 = abs(vy1 - vy2) < _EPS
+            if is_h2 != is_h:
+                continue
+
+            if is_h:
+                wy_w = (vy1 + vy2) / 2.0
+                if abs(wy_w - y1) > _EPS:
+                    continue
+                vx_min, vx_max = min(vx1, vx2), max(vx1, vx2)
+                if vx_min > wx_max - 1 or vx_max < wx_min + 1:
+                    continue
+                for ptx, pty in [(vx1, vy1), (vx2, vy2)]:
+                    sd = (ptx - x1) * nx + (pty - y1) * ny
+                    if abs(sd) < _EPS:
+                        continue
+                    if sd > 0:
+                        cnt_norm += 1
+                    else:
+                        cnt_opp += 1
+            else:
+                vx_w = (vx1 + vx2) / 2.0
+                if abs(vx_w - x1) > _EPS:
+                    continue
+                vy_min, vy_max = min(vy1, vy2), max(vy1, vy2)
+                if vy_min > wy_max - 1 or vy_max < wy_min + 1:
+                    continue
+                for ptx, pty in [(vx1, vy1), (vx2, vy2)]:
+                    sd = (ptx - x1) * nx + (pty - y1) * ny
+                    if abs(sd) < _EPS:
+                        continue
+                    if sd > 0:
+                        cnt_norm += 1
+                    else:
+                        cnt_opp += 1
+
+        if cnt_opp < cnt_norm:
+            flip_map.add(i)
+
+    return flip_map
+
+
 def draw_dimensions(
     draw: ImageDraw.ImageDraw,
+    img: Image.Image,
     wall_info: List[dict],
     wall_t: int,
     scale_mm_per_px: float,
     line_color: Tuple[int, int, int],
     text_color: Tuple[int, int, int],
     img_size: Tuple[int, int],
+    extra_offset_map: Optional[dict] = None,
+    flip_map: Optional[set] = None,
 ) -> None:
     """Нарисовать размерные линии с засечками и текст длины для внешних стен."""
-    for w in wall_info:
+    if extra_offset_map is None:
+        extra_offset_map = {}
+    if flip_map is None:
+        flip_map = set()
+
+    # --- Feature 2: дедупликация параллельных стен с одинаковым размером ---
+    # Группируем стены по (ориентация, длина_в_мм)
+    groups: dict = {}  # (orient, length_mm) -> list of (idx, total_offset)
+    for i, w in enumerate(wall_info):
         (x1, y1), (x2, y2) = w["midline"]
-        nx, ny = w["normal"]
         length_px = dist((x1, y1), (x2, y2))
         if length_px < DIM_MIN_LENGTH:
             continue
-        # Длина стены в мм
+        length_mm = round(length_px * scale_mm_per_px)
+        nx, ny = w["normal"]
+        orient = 'h' if abs(nx) < 0.5 else 'v'
+        total_offset = wall_t / 2.0 + DIM_OFFSET + extra_offset_map.get(i, 0)
+        key = (orient, length_mm)
+        groups.setdefault(key, []).append((i, total_offset))
+
+    skip: set = set()
+    for key, items in groups.items():
+        if len(items) > 1:
+            items.sort(key=lambda x: x[1], reverse=True)
+            for idx, _ in items[1:]:
+                skip.add(idx)
+
+    # --- Рисуем размеры ---
+    for i, w in enumerate(wall_info):
+        if i in skip:
+            continue
+        (x1, y1), (x2, y2) = w["midline"]
+        nx, ny = w["normal"]
+        if i in flip_map:
+            nx, ny = -nx, -ny
+        length_px = dist((x1, y1), (x2, y2))
+        if length_px < DIM_MIN_LENGTH:
+            continue
         length_mm = round(length_px * scale_mm_per_px)
 
         # Смещение размерной линии наружу
-        offset = wall_t / 2.0 + DIM_OFFSET
+        offset = wall_t / 2.0 + DIM_OFFSET + extra_offset_map.get(i, 0)
         # Выносные линии от концов стены перпендикулярно наружу
         ex1 = x1 + nx * offset
         ey1 = y1 + ny * offset
@@ -619,19 +792,61 @@ def draw_dimensions(
                    (int(ex2 + px * half_tick), int(ey2 + py * half_tick))],
                   fill=line_color, width=1)
 
-        # Текст размера над размерной линией
+        # Наклонные (45°) штрихи на пересечениях выносных и размерной линии
+        slant_x = ux - px
+        slant_y = uy - py
+        sl = math.hypot(slant_x, slant_y)
+        if sl > 1e-6:
+            sx, sy = slant_x / sl, slant_y / sl
+            draw.line([(int(ex1 - sx * half_tick * 2), int(ey1 - sy * half_tick * 2)),
+                       (int(ex1 + sx * half_tick * 2), int(ey1 + sy * half_tick * 2))],
+                      fill=line_color, width=1)
+            draw.line([(int(ex2 - sx * half_tick * 2), int(ey2 - sy * half_tick * 2)),
+                       (int(ex2 + sx * half_tick * 2), int(ey2 + sy * half_tick * 2))],
+                      fill=line_color, width=1)
+
+        # Текст размера — повёрнут вдоль размерной линии
         text = str(length_mm)
+
+        # Угол размерной линии (нормализуем для читаемости)
+        angle_deg = math.degrees(math.atan2(dy, dx))
+        _EPS_ANG = 1e-6
+        if abs(dx) < _EPS_ANG:                     # вертикальная выноска → 90° (CW)
+            angle_deg = -90.0
+        elif angle_deg > 90:
+            angle_deg -= 180
+        elif angle_deg < -90:
+            angle_deg += 180
+
         bbox = draw.textbbox((0, 0), text, font=_dim_font)
         tw = bbox[2] - bbox[0]
         th = bbox[3] - bbox[1]
 
-        # Центр размерной линии + смещение вдоль normal для текста
+        # Временное RGBA-изображение с текстом
+        padding = 4
+        txt_img = Image.new("RGBA", (tw + padding * 2, th + padding * 2), (0, 0, 0, 0))
+        txt_draw = ImageDraw.Draw(txt_img)
+        txt_draw.text((padding, padding), text, fill=text_color + (255,), font=_dim_font)
+        rotated = txt_img.rotate(-angle_deg, expand=True, resample=Image.BICUBIC)
+        rw, rh = rotated.size
+
+        # Центр размерной линии
         cx = (ex1 + ex2) / 2.0
         cy = (ey1 + ey2) / 2.0
-        text_offset = DIM_TICK_SIZE * 0.5 + 2
-        tx = cx + nx * text_offset - tw / 2.0
-        ty = cy + ny * text_offset - th / 2.0
-        draw.text((int(tx), int(ty)), text, fill=text_color, font=_dim_font)
+        text_offset = DIM_TICK_SIZE * 1.5 + 6
+
+        # Текст всегда «над» размерной линией (линия — подчёркивание)
+        # Для гориз. стен — выше (снаружи/внутри выноски), для верт. — левее
+        text_dir_x = -abs(nx)
+        text_dir_y = -abs(ny)
+        tx = cx + text_dir_x * text_offset - rw / 2.0
+        ty = cy + text_dir_y * text_offset - rh / 2.0
+
+        paste_x = int(tx)
+        paste_y = int(ty)
+
+        if isinstance(img, Image.Image):
+            img.paste(rotated, (paste_x, paste_y), rotated)
 
 
 # =============================================================================
@@ -941,11 +1156,10 @@ def draw_plan(
                         break
                 if fits:
                     break
-                if fits:
-                    break
             if not fits:
                 continue  # пропускаем — налетает на стену/другую дверь
             nx, ny = chosen_nx, chosen_ny
+            op.swing_dir = (nx, ny)
             # Точка створки (конец линии, перпендикулярной стене)
             swing = dw
             leaf_end = (int(op.p1[0] + nx * swing), int(op.p1[1] + ny * swing))
@@ -995,13 +1209,16 @@ def draw_plan(
             draw.line([i1, i2], fill=WIND_COL, width=line_w)
 
     # 9. Размеры стен
-    draw_dimensions(draw, wall_info, wall_t, SCALE_MM_PER_PX, (0, 0, 0), (0, 0, 0), img.size)
+    flip_map = _count_walls_per_side(wall_info)
+    wall_poly = compute_variable_wall_polygon(wall_info)
+    extra_map = compute_extra_offset_map(wall_info, openings, rooms, wall_t, room_union, wall_poly)
+    draw_dimensions(draw, img, wall_info, wall_t, SCALE_MM_PER_PX, (0, 0, 0), (0, 0, 0), img.size, extra_map, flip_map)
 
     # 10. Рукописные пометки (с вероятностью 60%)
     has_hw = False
     if random.random() < 0.6:
         try:
-            wp = compute_wall_polygon(rooms, wall_t)
+            wp = compute_variable_wall_polygon(wall_info)
         except Exception:
             wp = None
         has_hw = draw_handwriting(draw, img, wp)
@@ -1041,7 +1258,7 @@ def draw_mask(
     # 4. Проёмы поверх стен
     drawn_swings: List[Polygon] = []
     room_union = unary_union(rooms) if len(rooms) > 1 else rooms[0]
-    wall_polygon = compute_wall_polygon(rooms, wall_t)
+    wall_poly = compute_variable_wall_polygon(wall_info)
     for op in openings:
         rect = compute_opening_rect(op, wall_t)
         if len(rect) < 4:
@@ -1062,17 +1279,16 @@ def draw_mask(
                     fits = False
                     for outward in modes:
                         for dxn, dyn in [(nx, ny), (-nx, -ny)]:
-                            if door_clear(rooms, op, wall_t, dxn, dyn, dw, drawn_swings, outward, room_union, wall_polygon):
+                            if door_clear(rooms, op, wall_t, dxn, dyn, dw, drawn_swings, outward, room_union, wall_poly):
                                 chosen_nx, chosen_ny = dxn, dyn
                                 fits = True
                                 break
                         if fits:
                             break
-                        if fits:
-                            break
                     if not fits:
                         continue
                     nx, ny = chosen_nx, chosen_ny
+                    op.swing_dir = (nx, ny)
                     swing = dw
                     leaf_end = (op.p1[0] + nx * swing, op.p1[1] + ny * swing)
                     leaf_end = (max(0, min(leaf_end[0], mask.width)), max(0, min(leaf_end[1], mask.height)))
@@ -1123,7 +1339,9 @@ def draw_mask(
                 draw.line([i1, i2], fill=M_WIND, width=line_w)
 
     # 5. Размеры стен в маске
-    draw_dimensions(draw, wall_info, wall_t, SCALE_MM_PER_PX, M_DIM, M_DIM, mask.size)
+    flip_map = _count_walls_per_side(wall_info)
+    extra_map = compute_extra_offset_map(wall_info, openings, rooms, wall_t, room_union, wall_poly)
+    draw_dimensions(draw, mask, wall_info, wall_t, SCALE_MM_PER_PX, M_DIM, M_DIM, mask.size, extra_map, flip_map)
 
 
 # =============================================================================
@@ -1550,6 +1768,98 @@ def apply_scanning_artifacts(
     return Image.fromarray(result["output"]), applied
 
 
+def apply_scribbles(
+    img: Image.Image,
+) -> Tuple[Image.Image, bool]:
+    """Нанести случайные чернильные пометки (Scribbles) на изображение.
+    Возвращает (изображение, True если пометки были нанесены)."""
+    if not SCRIBBLES_ENABLED or random.random() >= SCRIBBLES_PROB:
+        return img, False
+
+    draw = ImageDraw.Draw(img)
+    w, h = img.size
+    placed = False
+
+    num_marks = random.randint(1, 4)
+    for _ in range(num_marks):
+        x1 = random.randint(10, w - 10)
+        y1 = random.randint(10, h - 10)
+        x2 = x1 + random.randint(-60, 60)
+        y2 = y1 + random.randint(-60, 60)
+        width = random.randint(1, 3)
+        gray = random.randint(30, 100)
+        draw.line([(x1, y1), (x2, y2)], fill=(gray, gray, gray), width=width)
+        placed = True
+
+    return img, placed
+
+
+# =============================================================================
+# ДЕДУПЛИКАЦИЯ СТЕН
+# =============================================================================
+
+def deduplicate_wall_info(
+    wall_info: List[dict],
+    wall_t: float,
+    openings: List[Opening],
+) -> List[dict]:
+    """Удалить back-to-back дубликаты стен (два сегмента одной стены с разных сторон).
+    Обновляет wall_idx в openings при удалении дубликатов."""
+    keep = [True] * len(wall_info)
+    n = len(wall_info)
+    max_dist = wall_t * 1.5
+
+    for i in range(n):
+        if not keep[i]:
+            continue
+        (x1, y1), (x2, y2) = wall_info[i]["midline"]
+        nx_i, ny_i = wall_info[i]["normal"]
+        horiz_i = abs(y1 - y2) < 1e-6
+
+        for j in range(i + 1, n):
+            if not keep[j]:
+                continue
+            (vx1, vy1), (vx2, vy2) = wall_info[j]["midline"]
+            nx_j, ny_j = wall_info[j]["normal"]
+            horiz_j = abs(vy1 - vy2) < 1e-6
+
+            if horiz_i != horiz_j:
+                continue
+
+            if nx_i * nx_j + ny_i * ny_j > -0.5:
+                continue
+
+            if horiz_i:
+                dist_y = abs(y1 - vy1)
+                if dist_y > max_dist:
+                    continue
+                overlap = max(0, min(x2, vx2) - max(x1, vx1))
+                if overlap < min(x2 - x1, vx2 - vx1) * 0.3:
+                    continue
+            else:
+                dist_x = abs(x1 - vx1)
+                if dist_x > max_dist:
+                    continue
+                overlap = max(0, min(y2, vy2) - max(y1, vy1))
+                if overlap < min(y2 - y1, vy2 - vy1) * 0.3:
+                    continue
+
+            keep[j] = False
+
+    old_to_new = {}
+    new_wall_info = []
+    for i, w in enumerate(wall_info):
+        if keep[i]:
+            old_to_new[i] = len(new_wall_info)
+            new_wall_info.append(w)
+
+    for op in openings:
+        if op.wall_idx in old_to_new:
+            op.wall_idx = old_to_new[op.wall_idx]
+
+    return new_wall_info
+
+
 # =============================================================================
 # ОСНОВНАЯ ФУНКЦИЯ
 # =============================================================================
@@ -1562,6 +1872,10 @@ def parse_args():
                         help=f"Директория вывода (по умолч. '{OUTPUT_DIR}')")
     parser.add_argument("--seed", type=int, default=None,
                         help="Сид для воспроизводимости")
+    parser.add_argument("--scribbles-prob", type=float, default=None,
+                        help="Вероятность Scribbles (0-1), 0=отключено")
+    parser.add_argument("--watermark-prob", type=float, default=None,
+                        help="Вероятность WaterMark (0-1), 0=отключено")
     return parser.parse_args()
 
 
@@ -1574,6 +1888,21 @@ def main():
 
     if args.seed is not None:
         random.seed(args.seed)
+
+    # CLI-параметры Scribbles / WaterMark
+    global SCRIBBLES_ENABLED, SCRIBBLES_PROB, WATERMARK_ENABLED, WATERMARK_PROB
+    if args.scribbles_prob is not None:
+        if args.scribbles_prob == 0:
+            SCRIBBLES_ENABLED = False
+            SCRIBBLES_PROB = 0.0
+        else:
+            SCRIBBLES_PROB = args.scribbles_prob
+    if args.watermark_prob is not None:
+        if args.watermark_prob == 0:
+            WATERMARK_ENABLED = False
+            WATERMARK_PROB = 0.0
+        else:
+            WATERMARK_PROB = args.watermark_prob
 
     os.makedirs(images_dir, exist_ok=True)
     os.makedirs(masks_dir, exist_ok=True)
@@ -1596,7 +1925,8 @@ def main():
     print(f"Генерация {num_images} изображений...")
     print(f"  -> Изображения: {images_dir}  (пропущено {start_idx} существующих)")
     print(f"  -> Маски:      {masks_dir}")
-    print(f"  -> Аугментация: {'вкл' if pipeline else 'выкл'}")
+    print(f"  -> Аугментация: {'вкл' if pipeline else 'выкл'}"
+          f"  Scribbles:{SCRIBBLES_PROB if SCRIBBLES_ENABLED else 0}  WaterMark:{WATERMARK_PROB if WATERMARK_ENABLED else 0}")
 
     for i in tqdm(range(num_images), desc="Планы", unit="img"):
         idx = start_idx + i
@@ -1604,6 +1934,9 @@ def main():
         canvas_h = random.randint(MIN_CANVAS, MAX_CANVAS)
 
         rooms, openings, wall_midlines, wall_info, wall_t, num_rooms = generate_plan(canvas_w, canvas_h)
+
+        # Удаляем back-to-back дубликаты (межквартирные стены из двух половинок)
+        wall_info = deduplicate_wall_info(wall_info, wall_t, openings)
 
         # Регионы несущих стен (один раз для плана и маски)
         lb_regions, _ = get_load_bearing_regions(rooms, wall_info, wall_t)
@@ -1616,11 +1949,18 @@ def main():
         mask = Image.new("RGB", (canvas_w, canvas_h), (0, 0, 0))
         draw_mask(mask, rooms, openings, wall_t, wall_info, lb_regions)
 
+        # Рукописные пометки (Scribbles) — на план, до pipeline
+        has_scribbles = False
+        img, has_scribbles = apply_scribbles(img)
+
         # Применяем артефакты сканирования только к изображению
         img, augs = apply_scanning_artifacts(img, pipeline)
 
         # Суффикс из названий сработавших аугментаций (подчёркивания в именах заменяем на дефисы)
-        aug_suffix = "_" + "_".join(a.replace("_", "-") for a in augs) if augs else "_clean"
+        aug_list = list(augs)
+        if has_scribbles:
+            aug_list.append("Scribbles")
+        aug_suffix = "_" + "_".join(a.replace("_", "-") for a in aug_list) if aug_list else "_clean"
 
         # Суффикс для рукописного текста
         hw_suffix = "_Handwriting" if has_handwriting else ""
