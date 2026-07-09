@@ -1063,10 +1063,12 @@ def draw_room_labels(
     room_labels: List[dict],
     text_color: Tuple[int, int, int],
     *,
+    fmt: str = "A",
     mask_mode: bool = False,
 ) -> None:
     """Нарисовать метки помещений по ГОСТ.
-    В режиме mask_mode — фиксированный формат A без дефектов."""
+    fmt — формат метки на весь план: A (номер+тип+площадь), B (номер+тип площадь), C (номер+площадь), D (номер+тип).
+    В режиме mask_mode — без дефектов, позиции совпадают с планом."""
     try:
         num_font = ImageFont.truetype("arial.ttf", ROOM_LABEL_NUM_FONT_SIZE)
         text_font = ImageFont.truetype("arial.ttf", ROOM_LABEL_TEXT_FONT_SIZE)
@@ -1089,7 +1091,6 @@ def draw_room_labels(
         rng = random.Random(num * 13 + 7)
 
         if mask_mode:
-            fmt = "A"
             circle_r = ROOM_LABEL_CIRCLE_R
             circle_width = 2
             angle = 0.0
@@ -1098,7 +1099,6 @@ def draw_room_labels(
             sep = "."
             area_suffix = "m2"
         else:
-            fmt = rng.choices(["A", "B", "C", "D"], weights=[40, 30, 15, 15])[0]
             circle_r = ROOM_LABEL_CIRCLE_R + rng.randint(-ROOM_LABEL_CIRCLE_R_RANGE, ROOM_LABEL_CIRCLE_R_RANGE)
             circle_width = rng.randint(1, 3)
             angle = rng.uniform(-5, 5)
@@ -1451,7 +1451,8 @@ def draw_plan(
 
     # 9.5. Маркировка помещений (ГОСТ 21.501-2011)
     room_labels = compute_room_labels(rooms, wall_info, wall_t, extra_map, flip_map)
-    draw_room_labels(draw, img, room_labels, (0, 0, 0))
+    plan_fmt = random.choices(["A", "B", "C", "D"], weights=[40, 30, 15, 15])[0]
+    draw_room_labels(draw, img, room_labels, (0, 0, 0), fmt=plan_fmt)
 
     # 10. Рукописные пометки (с вероятностью 60%)
     has_hw = False
@@ -1584,7 +1585,7 @@ def draw_mask(
 
     # 5.5. Маркировка помещений в маске
     room_labels = compute_room_labels(rooms, wall_info, wall_t, extra_map, flip_map)
-    draw_room_labels(draw, mask, room_labels, M_ROOM_LABEL, mask_mode=True)
+    draw_room_labels(draw, mask, room_labels, M_ROOM_LABEL, fmt="A", mask_mode=True)
 
 
 # =============================================================================
