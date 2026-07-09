@@ -66,6 +66,14 @@ DIM_TEXT_SIZE = 14           # размер шрифта текста разме
 DIM_MIN_LENGTH = 30          # мин. длина стены для простановки (px)
 DOOR_DIM_EXTRA_MARGIN = 20   # доп. отступ размерной линии, если дверь открывается в её сторону
 
+# Параметры маркировки помещений (ГОСТ 21.501-2011)
+ROOM_LABEL_CIRCLE_R = 28          # базовый радиус окружности вокруг номера (px)
+ROOM_LABEL_CIRCLE_R_RANGE = 3     # диапазон рандомизации радиуса (±px)
+ROOM_LABEL_NUM_FONT_SIZE = 15     # шрифт номера в круге
+ROOM_LABEL_TEXT_FONT_SIZE = 12    # шрифт типа/площади
+ROOM_LABEL_OFFSET_RANGE = 30      # макс. случайный сдвиг метки от центроида (px)
+ROOM_LABEL_MARGIN = 15            # мин. отступ метки от края комнаты (px)
+
 # Параметры штриховки несущих стен
 HATCH_LINE_WIDTH = 1         # толщина линии штриховки (px)
 HATCH_COLOR = (60, 60, 60)   # цвет штриховки на плане (тёмно-серый)
@@ -115,6 +123,7 @@ M_WALL_HATCH = (255, 128, 0)  # несущие стены в маске (ора�
 M_CORRIDOR = (0, 128, 255)     # коридор/общественная зона (голубой)
 M_WALL_EXTERIOR = (255, 128, 0)   # внешние стены (оранжевый)
 M_WALL_PARTY = (128, 128, 0)      # межквартирные стены (оливковый)
+M_ROOM_LABEL = (0, 0, 255)        # маркировка помещения в маске (синий)
 
 # =============================================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -933,6 +942,232 @@ def get_load_bearing_regions(
     return lb_regions, nlb_regions
 
 
+# =============================================================================
+# МАРКИРОВКА ПОМЕЩЕНИЙ (ГОСТ 21.501-2011)
+# =============================================================================
+def assign_room_type(area_m2: float) -> str:
+    """Вернуть тип помещения по площади."""
+    if area_m2 < 15:
+        return random.choice(["Санузел", "Кладовая", "Коридор"])
+    elif area_m2 < 25:
+        return random.choice(["Кухня", "Спальня", "Кабинет"])
+    elif area_m2 < 50:
+        return random.choice(["Жилая", "Спальня", "Кухня-гостиная"])
+    elif area_m2 < 80:
+        return random.choice(["Гостиная", "Жилая"])
+    else:
+        return random.choice(["Гостиная", "Зал"])
+
+
+def _dimension_exclusion_lines(
+    wall_info: List[dict],
+    wall_t: float,
+    extra_offset_map: Dict[int, float],
+    flip_map: set,
+) -> List[LineString]:
+    """Построить список LineString геометрии размерных линий для проверки пересечений."""
+    from shapely.geometry import LineString as SLine
+
+    lines: List[SLine] = []
+
+    for i, w in enumerate(wall_info):
+        (x1, y1), (x2, y2) = w["midline"]
+        nx, ny = w["normal"]
+        if i in flip_map:
+            nx, ny = -nx, -ny
+        length_px = math.hypot(x2 - x1, y2 - y1)
+        if length_px < DIM_MIN_LENGTH:
+            continue
+        offset = wall_t / 2.0 + DIM_OFFSET + extra_offset_map.get(i, 0)
+        ex1 = x1 + nx * offset
+        ey1 = y1 + ny * offset
+        ex2 = x2 + nx * offset
+        ey2 = y2 + ny * offset
+        lines.append(SLine([(x1, y1), (ex1, ey1)]))
+        lines.append(SLine([(x2, y2), (ex2, ey2)]))
+        lines.append(SLine([(ex1, ey1), (ex2, ey2)]))
+
+    return lines
+
+
+def compute_room_labels(
+    rooms: List[Polygon],
+    wall_info: List[dict],
+    wall_t: float,
+    extra_offset_map: Dict[int, float],
+    flip_map: set,
+) -> List[dict]:
+    """Вычислить метки помещений: номер, тип, площадь, позиция (cx, cy).
+    Позиции детерминированы (seeded random) — одинаковы для плана и маски."""
+    from shapely.geometry import Point as SPoint
+
+    dim_lines = _dimension_exclusion_lines(wall_info, wall_t, extra_offset_map, flip_map)
+    labels: List[dict] = []
+
+    for room_idx, poly in enumerate(rooms):
+        rng = random.Random(room_idx * 7 + 42)
+        point = poly.representative_point()
+        cx, cy = point.x, point.y
+
+        # Случайный сдвиг от центроида
+        for _ in range(20):
+            angle = rng.uniform(0, 2 * math.pi)
+            dist = rng.uniform(0, ROOM_LABEL_OFFSET_RANGE)
+            dx = math.cos(angle) * dist
+            dy = math.sin(angle) * dist
+            nx, ny = cx + dx, cy + dy
+            test_point = SPoint(nx, ny)
+            if not poly.contains(test_point):
+                continue
+            # Отступ от края полигона
+            if poly.boundary.distance(test_point) < ROOM_LABEL_MARGIN:
+                continue
+            # Отступ от стен (midline)
+            too_close = False
+            for w in wall_info:
+                (wx1, wy1), (wx2, wy2) = w["midline"]
+                seg = LineString([(wx1, wy1), (wx2, wy2)])
+                if test_point.distance(seg) < wall_t:
+                    too_close = True
+                    break
+            if too_close:
+                continue
+            # Проверка пересечения с размерными линиями
+            conflict = False
+            for dl in dim_lines:
+                if test_point.distance(dl) < ROOM_LABEL_CIRCLE_R + 10:
+                    conflict = True
+                    break
+            if conflict:
+                continue
+            cx, cy = nx, ny
+            break
+
+        area_m2 = round(poly.area * SCALE_MM_PER_PX * SCALE_MM_PER_PX / 1_000_000, 1)
+        room_type = assign_room_type(area_m2)
+
+        labels.append({
+            "number": room_idx + 1,
+            "type": room_type,
+            "area_m2": area_m2,
+            "cx": cx,
+            "cy": cy,
+        })
+
+    return labels
+
+
+def draw_room_labels(
+    draw: ImageDraw.ImageDraw,
+    img: Image.Image,
+    room_labels: List[dict],
+    text_color: Tuple[int, int, int],
+    *,
+    mask_mode: bool = False,
+) -> None:
+    """Нарисовать метки помещений по ГОСТ.
+    В режиме mask_mode — фиксированный формат A без дефектов."""
+    try:
+        num_font = ImageFont.truetype("arial.ttf", ROOM_LABEL_NUM_FONT_SIZE)
+        text_font = ImageFont.truetype("arial.ttf", ROOM_LABEL_TEXT_FONT_SIZE)
+    except IOError:
+        try:
+            num_font = ImageFont.truetype("DejaVuSans.ttf", ROOM_LABEL_NUM_FONT_SIZE)
+            text_font = ImageFont.truetype("DejaVuSans.ttf", ROOM_LABEL_TEXT_FONT_SIZE)
+        except IOError:
+            num_font = ImageFont.load_default()
+            text_font = ImageFont.load_default()
+
+    _ROOM_SEP_CHOICES = [".", ","]
+
+    for lbl in room_labels:
+        num = lbl["number"]
+        room_type = lbl["type"]
+        area = lbl["area_m2"]
+        cx, cy = lbl["cx"], lbl["cy"]
+
+        rng = random.Random(num * 13 + 7)
+
+        if mask_mode:
+            fmt = "A"
+            circle_r = ROOM_LABEL_CIRCLE_R
+            circle_width = 2
+            angle = 0.0
+            num_fs = ROOM_LABEL_NUM_FONT_SIZE
+            txt_fs = ROOM_LABEL_TEXT_FONT_SIZE
+            sep = "."
+            area_suffix = "m2"
+        else:
+            fmt = rng.choices(["A", "B", "C", "D"], weights=[40, 30, 15, 15])[0]
+            circle_r = ROOM_LABEL_CIRCLE_R + rng.randint(-ROOM_LABEL_CIRCLE_R_RANGE, ROOM_LABEL_CIRCLE_R_RANGE)
+            circle_width = rng.randint(1, 3)
+            angle = rng.uniform(-5, 5)
+            num_fs = ROOM_LABEL_NUM_FONT_SIZE + rng.randint(-2, 2)
+            txt_fs = ROOM_LABEL_TEXT_FONT_SIZE + rng.randint(-1, 1)
+            sep = rng.choice(_ROOM_SEP_CHOICES)
+            area_suffix = rng.choice(["m2", "kv.m", ""])
+
+        # Номер в окружности
+        num_str = str(num)
+        bbox_n = draw.textbbox((0, 0), num_str, font=num_font)
+        nw = bbox_n[2] - bbox_n[0]
+        nh = bbox_n[3] - bbox_n[1]
+        tx_n = cx - nw / 2.0 - bbox_n[0]
+        ty_n = cy - nh / 2.0 - bbox_n[1]
+
+        # Окружность
+        draw.ellipse(
+            [cx - circle_r, cy - circle_r, cx + circle_r, cy + circle_r],
+            outline=text_color, width=circle_width,
+        )
+        # Номер
+        draw.text((tx_n, ty_n), num_str, fill=text_color, font=num_font)
+
+        # Текст метки (тип и/или площадь) — под окружностью
+        area_str = f"{area:.1f}".replace(".", sep) + (f" {area_suffix}" if area_suffix else "")
+
+        if fmt == "A":
+            lines = [room_type, area_str]
+        elif fmt == "B":
+            lines = [f"{room_type} {area_str}"]
+        elif fmt == "C":
+            lines = [area_str]
+        else:  # fmt == "D"
+            lines = [room_type]
+
+        # Рендерим каждую строку текста
+        y_off = circle_r + 6
+        for line in lines:
+            bbox_t = draw.textbbox((0, 0), line, font=text_font)
+            tw = bbox_t[2] - bbox_t[0]
+            th = bbox_t[3] - bbox_t[1]
+
+            if mask_mode:
+                # Прямой рендеринг в маску (без RGBA-оверлея)
+                paste_x = int(cx - tw / 2.0 - bbox_t[0])
+                paste_y = int(cy + y_off - th / 2.0 - bbox_t[1])
+                draw.text((paste_x, paste_y), line, fill=text_color, font=text_font)
+                y_off += th + 4
+                continue
+
+            # План: RGBA-оверлей с поворотом
+            padding = 3
+            txt_img = Image.new("RGBA", (tw + padding * 2, th + padding * 2), (0, 0, 0, 0))
+            txt_draw = ImageDraw.Draw(txt_img)
+            txt_draw.text((padding - bbox_t[0], padding - bbox_t[1]), line,
+                          fill=text_color + (255,), font=text_font)
+
+            rotated = txt_img.rotate(angle, expand=True, resample=Image.BICUBIC)
+            rw, rh = rotated.size
+
+            paste_x = int(cx - rw / 2.0)
+            paste_y = int(cy + y_off - rh / 2.0)
+
+            img.paste(rotated, (paste_x, paste_y), rotated)
+
+            y_off += th + 4
+
+
 def draw_hatching(
     draw: ImageDraw.ImageDraw,
     regions: List[Polygon],
@@ -1214,6 +1449,10 @@ def draw_plan(
     extra_map = compute_extra_offset_map(wall_info, openings, rooms, wall_t, room_union, wall_poly)
     draw_dimensions(draw, img, wall_info, wall_t, SCALE_MM_PER_PX, (0, 0, 0), (0, 0, 0), img.size, extra_map, flip_map)
 
+    # 9.5. Маркировка помещений (ГОСТ 21.501-2011)
+    room_labels = compute_room_labels(rooms, wall_info, wall_t, extra_map, flip_map)
+    draw_room_labels(draw, img, room_labels, (0, 0, 0))
+
     # 10. Рукописные пометки (с вероятностью 60%)
     has_hw = False
     if random.random() < 0.6:
@@ -1342,6 +1581,10 @@ def draw_mask(
     flip_map = _count_walls_per_side(wall_info)
     extra_map = compute_extra_offset_map(wall_info, openings, rooms, wall_t, room_union, wall_poly)
     draw_dimensions(draw, mask, wall_info, wall_t, SCALE_MM_PER_PX, M_DIM, M_DIM, mask.size, extra_map, flip_map)
+
+    # 5.5. Маркировка помещений в маске
+    room_labels = compute_room_labels(rooms, wall_info, wall_t, extra_map, flip_map)
+    draw_room_labels(draw, mask, room_labels, M_ROOM_LABEL, mask_mode=True)
 
 
 # =============================================================================
