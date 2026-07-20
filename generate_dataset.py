@@ -1544,6 +1544,9 @@ def draw_mask(
     wall_t: int,
     wall_info: List[dict],
     lb_regions: List[Polygon],
+    *,
+    show_dimensions: bool = False,
+    show_labels: bool = False,
 ) -> None:
     """Нарисовать маску (цвета M_ROOM/M_WALL/M_WALL_HATCH/M_DOOR/M_DOORW/M_WIND/M_WINDW)."""
     draw = ImageDraw.Draw(mask)
@@ -1626,16 +1629,19 @@ def draw_mask(
                 i2 = (op.p2[0] + nx * (-half_spread + shift), op.p2[1] + ny * (-half_spread + shift))
                 draw.line([i1, i2], fill=M_WIND, width=line_w)
 
-    # 5. Размеры стен в маске
-    room_union = unary_union(rooms) if len(rooms) > 1 else rooms[0]
-    wall_poly = compute_variable_wall_polygon(wall_info)
-    flip_map = _count_walls_per_side(wall_info)
-    extra_map = compute_extra_offset_map(wall_info, openings, rooms, wall_t, room_union, wall_poly)
-    draw_dimensions(draw, mask, wall_info, wall_t, SCALE_MM_PER_PX, M_DIM, M_DIM, mask.size, extra_map, flip_map)
+    # 5. Размеры стен и маркировка помещений в маске
+    if show_dimensions or show_labels:
+        room_union = unary_union(rooms) if len(rooms) > 1 else rooms[0]
+        wall_poly = compute_variable_wall_polygon(wall_info)
+        flip_map = _count_walls_per_side(wall_info)
+        extra_map = compute_extra_offset_map(wall_info, openings, rooms, wall_t, room_union, wall_poly)
 
-    # 5.5. Маркировка помещений в маске
-    room_labels = compute_room_labels(rooms, wall_info, wall_t, extra_map, flip_map)
-    draw_room_labels(draw, mask, room_labels, M_ROOM_LABEL, fmt="A", mask_mode=True)
+        if show_dimensions:
+            draw_dimensions(draw, mask, wall_info, wall_t, SCALE_MM_PER_PX, M_DIM, M_DIM, mask.size, extra_map, flip_map)
+
+        if show_labels:
+            room_labels = compute_room_labels(rooms, wall_info, wall_t, extra_map, flip_map)
+            draw_room_labels(draw, mask, room_labels, M_ROOM_LABEL, fmt="A", mask_mode=True)
 
 
 # =============================================================================
@@ -2170,6 +2176,10 @@ def parse_args():
                         help="Вероятность Scribbles (0-1), 0=отключено")
     parser.add_argument("--watermark-prob", type=float, default=None,
                         help="Вероятность WaterMark (0-1), 0=отключено")
+    parser.add_argument("--no-mask-dimensions", action="store_true",
+                        help="Не рисовать выноски размеров на масках")
+    parser.add_argument("--no-mask-labels", action="store_true",
+                        help="Не рисовать маркировку помещений на масках")
     return parser.parse_args()
 
 
@@ -2241,7 +2251,9 @@ def main():
 
         # Маска (чистая, без аугментаций)
         mask = Image.new("RGB", (canvas_w, canvas_h), (0, 0, 0))
-        draw_mask(mask, rooms, openings, wall_t, wall_info, lb_regions)
+        draw_mask(mask, rooms, openings, wall_t, wall_info, lb_regions,
+                  show_dimensions=not args.no_mask_dimensions,
+                  show_labels=not args.no_mask_labels)
 
         # Рукописные пометки (Scribbles) — на план, до pipeline
         has_scribbles = False
