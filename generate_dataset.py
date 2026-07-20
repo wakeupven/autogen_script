@@ -362,12 +362,20 @@ def place_openings(
         op1 = point_along(wp1, wp2, pos)
         op2 = point_along(wp1, wp2, pos + ow)
 
-        # Проверяем, что проём не на стыке стен
-        mid_x = (op1[0] + op2[0]) / 2.0
-        mid_y = (op1[1] + op2[1]) / 2.0
+        # Проверяем, что проекция стыка не попадает в интервал проёма
+        dx = wp2[0] - wp1[0]
+        dy = wp2[1] - wp1[1]
         for jx, jy in junction_pts:
-            if math.hypot(mid_x - jx, mid_y - jy) < min_junction_dist:
-                return None
+            if wlen > 0:
+                t = ((jx - wp1[0]) * dx + (jy - wp1[1]) * dy) / (wlen * wlen)
+                if t < 0 or t > 1:
+                    continue
+                proj_x = wp1[0] + t * dx
+                proj_y = wp1[1] + t * dy
+                if math.hypot(jx - proj_x, jy - proj_y) < min_junction_dist:
+                    proj_pos = t * wlen
+                    if pos - min_junction_dist <= proj_pos <= pos + ow + min_junction_dist:
+                        return None
 
         ol = LineString([op1, op2])
         for ex in openings:
@@ -412,6 +420,26 @@ def place_openings(
                 pos = (jm + max_pos) / 2.0
                 op1 = point_along(wp1, wp2, pos)
                 op2 = point_along(wp1, wp2, pos + ow)
+                # Проверяем стыки в форсированном режиме (проекция на интервал)
+                dx = wp2[0] - wp1[0]
+                dy = wp2[1] - wp1[1]
+                junction_fail = False
+                for jx, jy in junction_pts:
+                    if wlen > 0:
+                        t = ((jx - wp1[0]) * dx + (jy - wp1[1]) * dy) / (wlen * wlen)
+                        if t < 0 or t > 1:
+                            continue
+                        proj_x = wp1[0] + t * dx
+                        proj_y = wp1[1] + t * dy
+                        if math.hypot(jx - proj_x, jy - proj_y) < min_junction_dist:
+                            proj_pos = t * wlen
+                            if pos - min_junction_dist <= proj_pos <= pos + ow + min_junction_dist:
+                                junction_fail = True
+                                break
+                    if junction_fail:
+                        break
+                if junction_fail:
+                    continue
                 openings.append(Opening("door", idx, pos, ow, op1, op2, wp1, wp2))
                 break
 
@@ -461,6 +489,7 @@ def door_clear(
     outward: bool = False,
     room_union: Optional[Polygon] = None,
     wall_polygon: Optional[Polygon] = None,
+    near_junction: bool = False,
 ) -> bool:
     """Проверить, что створка и дуга двери не пересекают стены и другие двери.
     outward=True — створка наружу (вне комнат);
@@ -508,9 +537,10 @@ def door_clear(
                 return False
 
     # Проверка пересечения со стенами (створка не должна задевать стены)
+    wall_threshold = 0.01 if near_junction else 0.05
     if wall_polygon is not None and swing_clean.area > 0:
         wall_overlap = swing_clean.intersection(wall_polygon).area
-        if wall_overlap / swing_clean.area > 0.05:
+        if wall_overlap / swing_clean.area > wall_threshold:
             return False
 
     # Проверка пересечения с уже нарисованными створками
@@ -1344,6 +1374,17 @@ def draw_plan(
     drawn_swings: List[Polygon] = []
     room_union = unary_union(rooms) if len(rooms) > 1 else rooms[0]
     wall_polygon = compute_wall_polygon(rooms, wall_t)
+    # Вычисляем стыки стен для проверки близости проёмов
+    wall_lines = [LineString(w["midline"]) for w in wall_info]
+    jxn_pts: List[Tuple[float, float]] = []
+    for i, l1 in enumerate(wall_lines):
+        for j, l2 in enumerate(wall_lines):
+            if j <= i:
+                continue
+            inter = l1.intersection(l2)
+            if inter.geom_type == "Point":
+                jxn_pts.append((inter.x, inter.y))
+    min_jxn_dist = wall_t * 1.5
     for op in openings:
         if op.type != "door":
             continue
@@ -1359,13 +1400,22 @@ def draw_plan(
         if dw < 1:
             op.swing_dir = None
             continue
+        # Проверяем, близко ли opening к стыку стен
+        near_jxn = False
+        for pt in [op.p1, op.p2]:
+            for jx, jy in jxn_pts:
+                if math.hypot(pt[0] - jx, pt[1] - jy) < min_jxn_dist * 1.5:
+                    near_jxn = True
+                    break
+            if near_jxn:
+                break
         modes = [False, True]
         random.shuffle(modes)
         chosen_nx, chosen_ny = nx, ny
         fits = False
         for outward in modes:
             for dxn, dyn in [(nx, ny), (-nx, -ny)]:
-                if door_clear(rooms, op, wall_t, dxn, dyn, dw, drawn_swings, outward, room_union, wall_polygon):
+                if door_clear(rooms, op, wall_t, dxn, dyn, dw, drawn_swings, outward, room_union, wall_polygon, near_junction=near_jxn):
                     chosen_nx, chosen_ny = dxn, dyn
                     fits = True
                     break
