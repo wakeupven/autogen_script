@@ -25,7 +25,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module="shapely")
 # =============================================================================
 # ПАРАМЕТРЫ
 # =============================================================================
-NUM_IMAGES = 10
+NUM_IMAGES = 100
 SEED = 42
 MIN_CANVAS = 1200
 MAX_CANVAS = 2500
@@ -115,7 +115,7 @@ FURN_COL = (160, 160, 160)
 M_ROOM = (0, 255, 255)
 M_WALL = (255, 255, 0)
 M_WIND = (255, 0, 0)
-M_DOOR = (255, 127, 80)
+M_DOOR = (255, 0, 255)
 M_DOORW = (128, 0, 128)
 M_WINDW = (0, 255, 0)
 M_DIM = (255, 0, 0)  # размерные элементы в маске
@@ -1340,8 +1340,59 @@ def draw_plan(
     for room in rooms:
         draw_shapely_poly(draw, room, fill=ROOM_FILL, outline=None)
 
-    # 4. Двери/окна — вырезаем прямоугольники поверх стен
+    # 3.5. Предварительный отбор дверей — определяем, какие влезут
+    drawn_swings: List[Polygon] = []
+    room_union = unary_union(rooms) if len(rooms) > 1 else rooms[0]
+    wall_polygon = compute_wall_polygon(rooms, wall_t)
     for op in openings:
+        if op.type != "door":
+            continue
+        wx = op.wall_p2[0] - op.wall_p1[0]
+        wy = op.wall_p2[1] - op.wall_p1[1]
+        wlen = math.hypot(wx, wy)
+        if wlen < 1:
+            op.swing_dir = None
+            continue
+        nx = -wy / wlen
+        ny = wx / wlen
+        dw = math.hypot(op.p2[0] - op.p1[0], op.p2[1] - op.p1[1])
+        if dw < 1:
+            op.swing_dir = None
+            continue
+        modes = [False, True]
+        random.shuffle(modes)
+        chosen_nx, chosen_ny = nx, ny
+        fits = False
+        for outward in modes:
+            for dxn, dyn in [(nx, ny), (-nx, -ny)]:
+                if door_clear(rooms, op, wall_t, dxn, dyn, dw, drawn_swings, outward, room_union, wall_polygon):
+                    chosen_nx, chosen_ny = dxn, dyn
+                    fits = True
+                    break
+            if fits:
+                break
+        if not fits:
+            op.swing_dir = None
+            continue
+        nx, ny = chosen_nx, chosen_ny
+        op.swing_dir = (nx, ny)
+        swing = dw
+        leaf_end = (op.p1[0] + nx * swing, op.p1[1] + ny * swing)
+        cx, cy = op.p1
+        a0 = math.atan2(op.p2[1] - cy, op.p2[0] - cx)
+        a1 = math.atan2(leaf_end[1] - cy, leaf_end[0] - cx)
+        sweep_a = (a1 - a0) % (2 * math.pi)
+        if sweep_a > math.pi:
+            a0, a1 = a1, a0
+        pts = [(cx + dw * math.cos(a0 + (a1 - a0) * i / 24),
+                cy + dw * math.sin(a0 + (a1 - a0) * i / 24))
+               for i in range(25)]
+        drawn_swings.append(Polygon([op.p1, leaf_end] + pts))
+
+    # 4. Проёмы — вырезаем прямоугольники поверх стен (двери без УГО пропускаем)
+    for op in openings:
+        if op.type == "door" and op.swing_dir is None:
+            continue
         rect = compute_opening_rect(op, wall_t)
         if len(rect) < 4:
             continue
@@ -1355,46 +1406,24 @@ def draw_plan(
     if outer is not None and not outer.is_empty:
         draw_shapely_poly(draw, outer, fill=None, outline=WALL_LINE, width=1)
 
-    # 7. Проёмы поверх обводок (чтобы линии не перечеркивали проём)
+    # 7. Проёмы поверх обводок (двери без УГО пропускаем)
     for op in openings:
+        if op.type == "door" and op.swing_dir is None:
+            continue
         rect = compute_opening_rect(op, wall_t)
         if len(rect) < 4:
             continue
         draw.polygon(rect, fill=ROOM_FILL)
 
     # 8. Дверные дуги и линии
-    drawn_swings: List[Polygon] = []
-    room_union = unary_union(rooms) if len(rooms) > 1 else rooms[0]
-    wall_polygon = compute_wall_polygon(rooms, wall_t)
     for op in openings:
         if op.type == "door":
-            wx = op.wall_p2[0] - op.wall_p1[0]
-            wy = op.wall_p2[1] - op.wall_p1[1]
-            wlen = math.hypot(wx, wy)
-            if wlen < 1:
+            if op.swing_dir is None:
                 continue
-            nx = -wy / wlen
-            ny = wx / wlen
+            nx, ny = op.swing_dir
             dw = math.hypot(op.p2[0] - op.p1[0], op.p2[1] - op.p1[1])
             if dw < 1:
                 continue
-            # Выбираем направление и сторону створки (внутрь/наружу)
-            modes = [False, True]
-            random.shuffle(modes)
-            chosen_nx, chosen_ny = nx, ny
-            fits = False
-            for outward in modes:
-                for dxn, dyn in [(nx, ny), (-nx, -ny)]:
-                    if door_clear(rooms, op, wall_t, dxn, dyn, dw, drawn_swings, outward, room_union, wall_polygon):
-                        chosen_nx, chosen_ny = dxn, dyn
-                        fits = True
-                        break
-                if fits:
-                    break
-            if not fits:
-                continue  # пропускаем — налетает на стену/другую дверь
-            nx, ny = chosen_nx, chosen_ny
-            op.swing_dir = (nx, ny)
             # Точка створки (конец линии, перпендикулярной стене)
             swing = dw
             leaf_end = (int(op.p1[0] + nx * swing), int(op.p1[1] + ny * swing))
@@ -1410,17 +1439,6 @@ def draw_plan(
             if sweep_d > 180:
                 ang_start, ang_end = ang_end, ang_start
             draw.arc(bbox, ang_start, ang_end, fill=DOOR_COL, width=max(2, wall_t // (DOOR_LINE_DIV + 1)))
-            # Сохраняем полигон створки для проверки пересечений
-            cx, cy = op.p1
-            a0 = math.atan2(op.p2[1] - cy, op.p2[0] - cx)
-            a1 = math.atan2(leaf_end[1] - cy, leaf_end[0] - cx)
-            sweep_a = (a1 - a0) % (2 * math.pi)
-            if sweep_a > math.pi:
-                a0, a1 = a1, a0
-            pts = [(cx + dw * math.cos(a0 + (a1 - a0) * i / 24),
-                    cy + dw * math.sin(a0 + (a1 - a0) * i / 24))
-                   for i in range(25)]
-            drawn_swings.append(Polygon([op.p1, leaf_end] + pts))
         else:
             # Окно — две параллельные линии (всегда внутри толщины стены)
             dx, dy = op.p2[0] - op.p1[0], op.p2[1] - op.p1[1]
@@ -1495,65 +1513,45 @@ def draw_mask(
     for region in lb_regions:
         draw_shapely_poly(draw, region, fill=M_WALL_HATCH, outline=None)
 
-    # 4. Проёмы поверх стен
+    # 4. Проёмы поверх стен (двери без УГО пропускаем — план тоже их пропустил)
     drawn_swings: List[Polygon] = []
-    room_union = unary_union(rooms) if len(rooms) > 1 else rooms[0]
-    wall_poly = compute_variable_wall_polygon(wall_info)
     for op in openings:
+        if op.type == "door" and op.swing_dir is None:
+            continue
         rect = compute_opening_rect(op, wall_t)
         if len(rect) < 4:
             continue
+        draw.polygon(rect, fill=M_DOORW if op.type == "door" else M_WINDW)
         if op.type == "door":
-            draw.polygon(rect, fill=M_DOORW)
-            wx = op.wall_p2[0] - op.wall_p1[0]
-            wy = op.wall_p2[1] - op.wall_p1[1]
-            wlen = math.hypot(wx, wy)
-            if wlen >= 1:
-                nx = -wy / wlen
-                ny = wx / wlen
-                dw = math.hypot(op.p2[0] - op.p1[0], op.p2[1] - op.p1[1])
-                if dw >= 1:
-                    modes = [False, True]
-                    random.shuffle(modes)
-                    chosen_nx, chosen_ny = nx, ny
-                    fits = False
-                    for outward in modes:
-                        for dxn, dyn in [(nx, ny), (-nx, -ny)]:
-                            if door_clear(rooms, op, wall_t, dxn, dyn, dw, drawn_swings, outward, room_union, wall_poly):
-                                chosen_nx, chosen_ny = dxn, dyn
-                                fits = True
-                                break
-                        if fits:
-                            break
-                    if not fits:
-                        continue
-                    nx, ny = chosen_nx, chosen_ny
-                    op.swing_dir = (nx, ny)
-                    swing = dw
-                    leaf_end = (op.p1[0] + nx * swing, op.p1[1] + ny * swing)
-                    leaf_end = (max(0, min(leaf_end[0], mask.width)), max(0, min(leaf_end[1], mask.height)))
-                    # Линия створки
-                    draw.line([(op.p1[0], op.p1[1]), leaf_end], fill=M_DOOR, width=max(2, wall_t // DOOR_LINE_DIV))
-                    # Дуга 90°
-                    r = int(dw)
-                    bbox = (int(op.p1[0] - r), int(op.p1[1] - r), int(op.p1[0] + r), int(op.p1[1] + r))
-                    ang_start = math.degrees(math.atan2(op.p2[1] - op.p1[1], op.p2[0] - op.p1[0]))
-                    ang_end = math.degrees(math.atan2(leaf_end[1] - op.p1[1], leaf_end[0] - op.p1[0]))
-                    sweep_d = (ang_end - ang_start) % 360
-                    if sweep_d > 180:
-                        ang_start, ang_end = ang_end, ang_start
-                    draw.arc(bbox, ang_start, ang_end, fill=M_DOOR, width=max(2, wall_t // (DOOR_LINE_DIV + 1)))
-                    # Сохраняем полигон створки для проверки пересечений
-                    cx, cy = op.p1
-                    a0 = math.atan2(op.p2[1] - cy, op.p2[0] - cx)
-                    a1 = math.atan2(leaf_end[1] - cy, leaf_end[0] - cx)
-                    sweep_a = (a1 - a0) % (2 * math.pi)
-                    if sweep_a > math.pi:
-                        a0, a1 = a1, a0
-                    pts = [(cx + dw * math.cos(a0 + (a1 - a0) * i / 24),
-                            cy + dw * math.sin(a0 + (a1 - a0) * i / 24))
-                           for i in range(25)]
-                    drawn_swings.append(Polygon([op.p1, leaf_end] + pts))
+            nx, ny = op.swing_dir
+            dw = math.hypot(op.p2[0] - op.p1[0], op.p2[1] - op.p1[1])
+            if dw < 1:
+                continue
+            swing = dw
+            leaf_end = (op.p1[0] + nx * swing, op.p1[1] + ny * swing)
+            leaf_end = (max(0, min(leaf_end[0], mask.width)), max(0, min(leaf_end[1], mask.height)))
+            # Линия створки
+            draw.line([(op.p1[0], op.p1[1]), leaf_end], fill=M_DOOR, width=max(2, wall_t // DOOR_LINE_DIV))
+            # Дуга 90°
+            r = int(dw)
+            bbox = (int(op.p1[0] - r), int(op.p1[1] - r), int(op.p1[0] + r), int(op.p1[1] + r))
+            ang_start = math.degrees(math.atan2(op.p2[1] - op.p1[1], op.p2[0] - op.p1[0]))
+            ang_end = math.degrees(math.atan2(leaf_end[1] - op.p1[1], leaf_end[0] - op.p1[0]))
+            sweep_d = (ang_end - ang_start) % 360
+            if sweep_d > 180:
+                ang_start, ang_end = ang_end, ang_start
+            draw.arc(bbox, ang_start, ang_end, fill=M_DOOR, width=max(2, wall_t // (DOOR_LINE_DIV + 1)))
+            # Сохраняем полигон створки для проверки пересечений
+            cx, cy = op.p1
+            a0 = math.atan2(op.p2[1] - cy, op.p2[0] - cx)
+            a1 = math.atan2(leaf_end[1] - cy, leaf_end[0] - cx)
+            sweep_a = (a1 - a0) % (2 * math.pi)
+            if sweep_a > math.pi:
+                a0, a1 = a1, a0
+            pts = [(cx + dw * math.cos(a0 + (a1 - a0) * i / 24),
+                    cy + dw * math.sin(a0 + (a1 - a0) * i / 24))
+                   for i in range(25)]
+            drawn_swings.append(Polygon([op.p1, leaf_end] + pts))
         else:
             draw.polygon(rect, fill=M_WINDW)
             # Две поперечные линии окна (всегда внутри толщины стены)
@@ -1579,6 +1577,8 @@ def draw_mask(
                 draw.line([i1, i2], fill=M_WIND, width=line_w)
 
     # 5. Размеры стен в маске
+    room_union = unary_union(rooms) if len(rooms) > 1 else rooms[0]
+    wall_poly = compute_variable_wall_polygon(wall_info)
     flip_map = _count_walls_per_side(wall_info)
     extra_map = compute_extra_offset_map(wall_info, openings, rooms, wall_t, room_union, wall_poly)
     draw_dimensions(draw, mask, wall_info, wall_t, SCALE_MM_PER_PX, M_DIM, M_DIM, mask.size, extra_map, flip_map)
