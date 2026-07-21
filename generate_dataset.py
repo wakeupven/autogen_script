@@ -26,8 +26,12 @@ warnings.filterwarnings("ignore", category=UserWarning, module="shapely")
 # ПАРАМЕТРЫ
 # =============================================================================
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 NUM_IMAGES = 100
 SEED = 42
+=======
+NUM_IMAGES = 10
+>>>>>>> Stashed changes
 =======
 NUM_IMAGES = 10
 >>>>>>> Stashed changes
@@ -106,7 +110,11 @@ M_ROOM = (0, 255, 255)
 M_WALL = (255, 255, 0)
 M_WIND = (255, 0, 0)
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 M_DOOR = (255, 0, 255)
+=======
+M_DOOR = (0, 0, 255)
+>>>>>>> Stashed changes
 =======
 M_DOOR = (0, 0, 255)
 >>>>>>> Stashed changes
@@ -1516,8 +1524,13 @@ def draw_mask(
     lb_regions: List[Polygon],
     *,
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
     show_dimensions: bool = False,
     show_labels: bool = False,
+=======
+    show_dimensions: bool = True,
+    show_labels: bool = True,
+>>>>>>> Stashed changes
 =======
     show_dimensions: bool = True,
     show_labels: bool = True,
@@ -1663,8 +1676,11 @@ def draw_mask(
     # 5. Размеры стен и маркировка помещений в маске
     if show_dimensions or show_labels:
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
         room_union = unary_union(rooms) if len(rooms) > 1 else rooms[0]
         wall_poly = compute_variable_wall_polygon(wall_info)
+=======
+>>>>>>> Stashed changes
 =======
 >>>>>>> Stashed changes
         flip_map = _count_walls_per_side(wall_info)
