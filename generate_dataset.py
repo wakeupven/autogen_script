@@ -25,8 +25,12 @@ warnings.filterwarnings("ignore", category=UserWarning, module="shapely")
 # =============================================================================
 # ПАРАМЕТРЫ
 # =============================================================================
+<<<<<<< Updated upstream
 NUM_IMAGES = 100
 SEED = 42
+=======
+NUM_IMAGES = 10
+>>>>>>> Stashed changes
 MIN_CANVAS = 1200
 MAX_CANVAS = 2500
 WALL_T_MIN = 12
@@ -79,19 +83,7 @@ HATCH_LINE_WIDTH = 1         # толщина линии штриховки (px)
 HATCH_COLOR = (60, 60, 60)   # цвет штриховки на плане (тёмно-серый)
 LOAD_BEARING_INTERIOR_PROB = 0.3  # вероятность несущей для внутренней стены
 
-# Параметры генерации этажа с квартирами
-WALL_T_EXT_SCALE = 1.5       # внешние стены: wall_t * scale
-WALL_T_PARTY_SCALE = 1.2     # межквартирные стены: wall_t * scale
-MIN_APARTMENTS = 2
-MAX_APARTMENTS = 6
-MIN_APARTMENT_AREA = 50000   # минимальная площадь квартиры (px²)
-CORRIDOR_W_MIN = 120
-CORRIDOR_W_MAX = 200
-STAIRWELL_SIZE = 180         # размер лестнично-лифтового узла (px)
-
 OUTPUT_DIR = "dataset"
-IMAGES_DIR = os.path.join(OUTPUT_DIR, "images")
-MASKS_DIR = os.path.join(OUTPUT_DIR, "masks")
 
 # Параметры Scribbles (рукописные пометки на изображении)
 SCRIBBLES_ENABLED = True
@@ -106,23 +98,22 @@ WATERMARK_PROB = 0.0
 # =============================================================================
 BG = (255, 255, 255)
 WALL_LINE = (20, 20, 20)
-WALL_FILL = (180, 180, 180)
 ROOM_FILL = (245, 245, 245)
 DOOR_COL = (20, 20, 20)
 WIND_COL = (20, 20, 20)
-FURN_COL = (160, 160, 160)
 
 M_ROOM = (0, 255, 255)
 M_WALL = (255, 255, 0)
 M_WIND = (255, 0, 0)
+<<<<<<< Updated upstream
 M_DOOR = (255, 0, 255)
+=======
+M_DOOR = (0, 0, 255)
+>>>>>>> Stashed changes
 M_DOORW = (128, 0, 128)
 M_WINDW = (0, 255, 0)
 M_DIM = (255, 0, 0)  # размерные элементы в маске
 M_WALL_HATCH = (255, 128, 0)  # несущие стены в маске (оранжевый)
-M_CORRIDOR = (0, 128, 255)     # коридор/общественная зона (голубой)
-M_WALL_EXTERIOR = (255, 128, 0)   # внешние стены (оранжевый)
-M_WALL_PARTY = (128, 128, 0)      # межквартирные стены (оливковый)
 M_ROOM_LABEL = (0, 0, 255)        # маркировка помещения в маске (синий)
 
 # =============================================================================
@@ -146,21 +137,6 @@ def point_along(p1: Tuple[float, float], p2: Tuple[float, float], d: float) -> T
     if length < 1e-6:
         return p1
     return (p1[0] + dx * d / length, p1[1] + dy * d / length)
-
-def line_offset(p1, p2, offset):
-    dx, dy = p2[0] - p1[0], p2[1] - p1[1]
-    length = math.hypot(dx, dy)
-    if length < 1e-6:
-        return (p1, p2)
-    nx, ny = -dy / length, dx / length
-    return ((p1[0] + nx * offset, p1[1] + ny * offset),
-            (p2[0] + nx * offset, p2[1] + ny * offset))
-
-def rect_from_line(p1, p2, thickness):
-    half = thickness / 2.0
-    a1, a2 = line_offset(p1, p2, half)
-    b1, b2 = line_offset(p1, p2, -half)
-    return [a1, a2, b2, b1]
 
 def draw_shapely_poly(draw, polygon, fill, outline=None, width=1):
     if polygon is None:
@@ -548,8 +524,6 @@ def door_clear(
         for existing in drawn_swings:
             if swing.intersects(existing):
                 return False
-
-    return True
 
     return True
 
@@ -1124,16 +1098,12 @@ def draw_room_labels(
             circle_r = ROOM_LABEL_CIRCLE_R
             circle_width = 2
             angle = 0.0
-            num_fs = ROOM_LABEL_NUM_FONT_SIZE
-            txt_fs = ROOM_LABEL_TEXT_FONT_SIZE
             sep = "."
             area_suffix = "m2"
         else:
             circle_r = ROOM_LABEL_CIRCLE_R + rng.randint(-ROOM_LABEL_CIRCLE_R_RANGE, ROOM_LABEL_CIRCLE_R_RANGE)
             circle_width = rng.randint(1, 3)
             angle = rng.uniform(-5, 5)
-            num_fs = ROOM_LABEL_NUM_FONT_SIZE + rng.randint(-2, 2)
-            txt_fs = ROOM_LABEL_TEXT_FONT_SIZE + rng.randint(-1, 1)
             sep = rng.choice(_ROOM_SEP_CHOICES)
             area_suffix = rng.choice(["m2", "kv.m", ""])
 
@@ -1545,8 +1515,13 @@ def draw_mask(
     wall_info: List[dict],
     lb_regions: List[Polygon],
     *,
+<<<<<<< Updated upstream
     show_dimensions: bool = False,
     show_labels: bool = False,
+=======
+    show_dimensions: bool = True,
+    show_labels: bool = True,
+>>>>>>> Stashed changes
 ) -> None:
     """Нарисовать маску (цвета M_ROOM/M_WALL/M_WALL_HATCH/M_DOOR/M_DOORW/M_WIND/M_WINDW)."""
     draw = ImageDraw.Draw(mask)
@@ -1576,6 +1551,7 @@ def draw_mask(
             continue
         draw.polygon(rect, fill=M_DOORW if op.type == "door" else M_WINDW)
         if op.type == "door":
+<<<<<<< Updated upstream
             nx, ny = op.swing_dir
             dw = math.hypot(op.p2[0] - op.p1[0], op.p2[1] - op.p1[1])
             if dw < 1:
@@ -1605,6 +1581,61 @@ def draw_mask(
                     cy + dw * math.sin(a0 + (a1 - a0) * i / 24))
                    for i in range(25)]
             drawn_swings.append(Polygon([op.p1, leaf_end] + pts))
+=======
+            draw.polygon(rect, fill=M_DOORW)
+            wx = op.wall_p2[0] - op.wall_p1[0]
+            wy = op.wall_p2[1] - op.wall_p1[1]
+            wlen = math.hypot(wx, wy)
+            if wlen >= 1:
+                nx = -wy / wlen
+                ny = wx / wlen
+                dw = math.hypot(op.p2[0] - op.p1[0], op.p2[1] - op.p1[1])
+                if dw >= 1:
+                    if op.swing_dir is not None:
+                        nx, ny = op.swing_dir
+                    else:
+                        modes = [False, True]
+                        random.shuffle(modes)
+                        chosen_nx, chosen_ny = nx, ny
+                        fits = False
+                        for outward in modes:
+                            for dxn, dyn in [(nx, ny), (-nx, -ny)]:
+                                if door_clear(rooms, op, wall_t, dxn, dyn, dw, drawn_swings, outward, room_union, wall_poly):
+                                    chosen_nx, chosen_ny = dxn, dyn
+                                    fits = True
+                                    break
+                            if fits:
+                                break
+                        if not fits:
+                            continue
+                        nx, ny = chosen_nx, chosen_ny
+                        op.swing_dir = (nx, ny)
+                    swing = dw
+                    leaf_end = (op.p1[0] + nx * swing, op.p1[1] + ny * swing)
+                    leaf_end = (max(0, min(leaf_end[0], mask.width)), max(0, min(leaf_end[1], mask.height)))
+                    # Линия створки
+                    draw.line([(op.p1[0], op.p1[1]), leaf_end], fill=M_DOOR, width=max(2, wall_t // DOOR_LINE_DIV))
+                    # Дуга 90°
+                    r = int(dw)
+                    bbox = (int(op.p1[0] - r), int(op.p1[1] - r), int(op.p1[0] + r), int(op.p1[1] + r))
+                    ang_start = math.degrees(math.atan2(op.p2[1] - op.p1[1], op.p2[0] - op.p1[0]))
+                    ang_end = math.degrees(math.atan2(leaf_end[1] - op.p1[1], leaf_end[0] - op.p1[0]))
+                    sweep_d = (ang_end - ang_start) % 360
+                    if sweep_d > 180:
+                        ang_start, ang_end = ang_end, ang_start
+                    draw.arc(bbox, ang_start, ang_end, fill=M_DOOR, width=max(2, wall_t // (DOOR_LINE_DIV + 1)))
+                    # Сохраняем полигон створки для проверки пересечений
+                    cx, cy = op.p1
+                    a0 = math.atan2(op.p2[1] - cy, op.p2[0] - cx)
+                    a1 = math.atan2(leaf_end[1] - cy, leaf_end[0] - cx)
+                    sweep_a = (a1 - a0) % (2 * math.pi)
+                    if sweep_a > math.pi:
+                        a0, a1 = a1, a0
+                    pts = [(cx + dw * math.cos(a0 + (a1 - a0) * i / 24),
+                            cy + dw * math.sin(a0 + (a1 - a0) * i / 24))
+                           for i in range(25)]
+                    drawn_swings.append(Polygon([op.p1, leaf_end] + pts))
+>>>>>>> Stashed changes
         else:
             draw.polygon(rect, fill=M_WINDW)
             # Две поперечные линии окна (всегда внутри толщины стены)
@@ -1631,8 +1662,11 @@ def draw_mask(
 
     # 5. Размеры стен и маркировка помещений в маске
     if show_dimensions or show_labels:
+<<<<<<< Updated upstream
         room_union = unary_union(rooms) if len(rooms) > 1 else rooms[0]
         wall_poly = compute_variable_wall_polygon(wall_info)
+=======
+>>>>>>> Stashed changes
         flip_map = _count_walls_per_side(wall_info)
         extra_map = compute_extra_offset_map(wall_info, openings, rooms, wall_t, room_union, wall_poly)
 
@@ -1644,342 +1678,6 @@ def draw_mask(
             draw_room_labels(draw, mask, room_labels, M_ROOM_LABEL, fmt="A", mask_mode=True)
 
 
-# =============================================================================
-# ГЕНЕРАЦИЯ ЭТАЖА С КВАРТИРАМИ И ОБЩЕСТВЕННЫМИ ЗОНАМИ
-# =============================================================================
-def generate_floor_layout(
-    canvas_w: int, canvas_h: int, wall_t_int: float
-) -> Tuple[List[Polygon], List[dict], List[dict], List[str]]:
-    """Генерировать этаж: коридор, ЛЛУ, квартиры.
-    Возвращает (rooms, wall_info, wall_segments, room_types).
-    room_types[i] — тип i-й комнаты: 'room', 'corridor', 'stairwell'.
-    wall_info расширен полями wall_type и thickness.
-    """
-    margin = CANVAS_MARGIN
-    bb_x1, bb_y1 = margin, margin
-    bb_x2, bb_y2 = canvas_w - margin, canvas_h - margin
-
-    if bb_x2 - bb_x1 < 600 or bb_y2 - bb_y1 < 600:
-        bb_x1, bb_y1 = 100, 100
-        bb_x2, bb_y2 = canvas_w - 100, canvas_h - 100
-
-    half_ext = wall_t_int * WALL_T_EXT_SCALE / 2.0
-    half_party = wall_t_int * WALL_T_PARTY_SCALE / 2.0
-    half_int = wall_t_int / 2.0
-
-    def thick(wt: str) -> float:
-        if wt == "exterior":
-            return wall_t_int * WALL_T_EXT_SCALE
-        if wt == "party":
-            return wall_t_int * WALL_T_PARTY_SCALE
-        return wall_t_int
-
-    # --- 1. Коридор ---
-    corr_w = random.randint(CORRIDOR_W_MIN, CORRIDOR_W_MAX)
-    is_horizontal = random.random() < 0.5
-
-    bbox_w = bb_x2 - bb_x1
-    bbox_h = bb_y2 - bb_y1
-
-    if is_horizontal:
-        # Горизонтальный коридор — делит этаж по вертикали
-        corr_y = random.randint(int(bb_y1 + bbox_h * 0.3), int(bb_y2 - bbox_h * 0.3))
-        corr_y = max(bb_y1 + corr_w, min(corr_y, bb_y2 - corr_w))
-        corr_rect = (bb_x1, corr_y - corr_w // 2, bb_x2, corr_y + corr_w // 2 + corr_w % 2)
-        # ЛЛУ — слева
-        stair_rect = (bb_x1, corr_y - corr_w // 2, bb_x1 + STAIRWELL_SIZE, corr_y + corr_w // 2)
-        # Лоты: верхний ряд, нижний ряд
-        top_y1, top_y2 = bb_y1, corr_rect[1]
-        bot_y1, bot_y2 = corr_rect[3], bb_y2
-        row_specs = [
-            ("top", top_y1, top_y2),
-            ("bot", bot_y1, bot_y2),
-        ]
-    else:
-        # Вертикальный коридор — делит этаж по горизонтали
-        corr_x = random.randint(int(bb_x1 + bbox_w * 0.3), int(bb_x2 - bbox_w * 0.3))
-        corr_x = max(bb_x1 + corr_w, min(corr_x, bb_x2 - corr_w))
-        corr_rect = (corr_x - corr_w // 2, bb_y1, corr_x + corr_w // 2 + corr_w % 2, bb_y2)
-        # ЛЛУ — сверху
-        stair_rect = (corr_x - corr_w // 2, bb_y1, corr_x + corr_w // 2, bb_y1 + STAIRWELL_SIZE)
-        # Лоты: левый ряд, правый ряд
-        left_x1, left_x2 = bb_x1, corr_rect[0]
-        right_x1, right_x2 = corr_rect[2], bb_x2
-        row_specs = [
-            ("left", left_x1, left_x2),
-            ("right", right_x1, right_x2),
-        ]
-
-    # --- 2. Полигоны коридора и ЛЛУ ---
-    corridor_poly = box(*corr_rect)
-    stair_poly = box(*stair_rect)
-
-    # --- 3. Деление рядов на лоты квартир ---
-    num_aparts = random.randint(MIN_APARTMENTS, MAX_APARTMENTS)
-
-    all_rooms: List[Polygon] = []
-    all_room_types: List[str] = []
-    all_wall_info: List[dict] = []
-    all_wall_midlines: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
-
-    # Добавляем коридор и ЛЛУ как комнаты
-    all_rooms.append(corridor_poly)
-    all_room_types.append("corridor")
-    all_rooms.append(stair_poly)
-    all_room_types.append("stairwell")
-
-    apt_bboxes: List[Tuple[float, float, float, float, str]] = []  # (x1,y1,x2,y2,side)
-
-    for side, s1, s2 in row_specs:
-        if is_horizontal:
-            available = bb_x2 - bb_x1
-            min_apt_w = max(300, int(math.sqrt(MIN_APARTMENT_AREA * (bbox_w / bbox_h))))
-
-            if num_aparts * min_apt_w > available:
-                n = max(1, int(available / min_apt_w))
-            else:
-                n = max(1, num_aparts // len(row_specs))
-
-            # Распределяем лоты равномерно
-            part_w = (available - (n - 1) * half_party * 2) / n
-            if part_w < min_apt_w:
-                part_w = min_apt_w
-                n = max(1, int(available / (part_w + half_party * 2)))
-
-            for j in range(n):
-                ax1 = bb_x1 + j * (part_w + half_party * 2)
-                ax2 = ax1 + part_w
-                if ax2 > bb_x2:
-                    ax2 = bb_x2
-                    ax1 = ax2 - part_w
-                if ax1 < bb_x1:
-                    ax1 = bb_x1
-                apt_bboxes.append((ax1, s1, ax2, s2, side))
-        else:
-            available = bb_y2 - bb_y1
-            min_apt_h = max(300, int(math.sqrt(MIN_APARTMENT_AREA * (bbox_h / bbox_w))))
-            n = max(1, num_aparts // len(row_specs))
-            part_h = (available - (n - 1) * half_party * 2) / n
-            if part_h < min_apt_h:
-                part_h = min_apt_h
-                n = max(1, int(available / (part_h + half_party * 2)))
-
-            for j in range(n):
-                ay1 = bb_y1 + j * (part_h + half_party * 2)
-                ay2 = ay1 + part_h
-                if ay2 > bb_y2:
-                    ay2 = bb_y2
-                    ay1 = ay2 - part_h
-                if ay1 < bb_y1:
-                    ay1 = bb_y1
-                apt_bboxes.append((s1, ay1, s2, ay2, side))
-
-    if not apt_bboxes:
-        apt_bboxes.append((bb_x1 + corr_w, bb_y1 + corr_w, bb_x2 - corr_w, bb_y2 - corr_w, "top" if is_horizontal else "left"))
-
-    # --- 4. BSP внутри каждой квартиры ---
-    for ax1, ay1, ax2, ay2, side in apt_bboxes:
-        if ax2 - ax1 < 200 or ay2 - ay1 < 200:
-            # Квартира-студия (одна комната)
-            room_poly = box(ax1 + half_int, ay1 + half_int, ax2 - half_int, ay2 - half_int)
-            all_rooms.append(room_poly)
-            all_room_types.append("room")
-            continue
-
-        apt_rooms, apt_walls = _bsp_apartment(ax1, ay1, ax2, ay2, wall_t_int)
-        for r in apt_rooms:
-            all_rooms.append(r)
-            all_room_types.append("room")
-
-        for w in apt_walls:
-            w["wall_type"] = "interior"
-            all_wall_info.append(w)
-            all_wall_midlines.append(w["midline"])
-
-        # --- 5. Стены по периметру квартиры (межквартирные и внешние) ---
-        # Верхняя, нижняя, левая, правая границы квартиры
-        perim_edges = [
-            ("h", ax1, ay1, ax2, ay1, "top"),
-            ("h", ax1, ay2, ax2, ay2, "bottom"),
-            ("v", ax1, ay1, ax1, ay2, "left"),
-            ("v", ax2, ay1, ax2, ay2, "right"),
-        ]
-        for etype, ex1, ey1, ex2, ey2, pos in perim_edges:
-            # Пропускаем границу, смежную с коридором
-            if is_horizontal and ((side == "top" and pos == "bottom") or (side == "bot" and pos == "top")):
-                continue
-            if not is_horizontal and ((side == "left" and pos == "right") or (side == "right" and pos == "left")):
-                continue
-
-            midline = ((ex1, ey1), (ex2, ey2)) if etype == "h" else ((ex1, ey1), (ex2, ey2))
-
-            # Определяем тип стены: внешняя или межквартирная
-            is_ext = False
-            if etype == "h":
-                if pos == "top" and side == "top":
-                    is_ext = True
-                elif pos == "bottom" and side == "bot":
-                    is_ext = True
-                else:
-                    is_ext = any(ay1 == bb_y1 or ay2 == bb_y2 for ax1, ay1, ax2, ay2, _ in apt_bboxes if (ex1, ey1, ex2, ey2) == (ax1, ay1, ax2, ay1))
-                    # Упрощённо: если на границе building bbox
-                    is_ext = (pos == "top" and ay1 == bb_y1) or (pos == "bottom" and ay2 == bb_y2)
-            else:
-                if pos == "left" and side == "left":
-                    is_ext = True
-                elif pos == "right" and side == "right":
-                    is_ext = True
-                else:
-                    is_ext = (pos == "left" and ax1 == bb_x1) or (pos == "right" and ax2 == bb_x2)
-
-            wt = "exterior" if is_ext else "party"
-            half_t = thick(wt) / 2.0
-
-            # Смещаем midline для внешних/межквартирных стен
-            if etype == "h":
-                if wt == "exterior":
-                    if pos == "top":
-                        midline = ((ex1 - half_t, ey1 + (thick(wt) - wall_t_int) / 2), (ex2 + half_t, ey1 + (thick(wt) - wall_t_int) / 2))
-                        normal = (0, -1)
-                    else:  # bottom
-                        midline = ((ex1 - half_t, ey1 - (thick(wt) - wall_t_int) / 2), (ex2 + half_t, ey1 - (thick(wt) - wall_t_int) / 2))
-                        normal = (0, 1)
-                else:
-                    if pos == "top":
-                        midline = ((ex1 - half_t, ey1 + half_int), (ex2 + half_t, ey1 + half_int))
-                        normal = (0, -1)
-                    else:
-                        midline = ((ex1 - half_t, ey1 - half_int), (ex2 + half_t, ey1 - half_int))
-                        normal = (0, 1)
-            else:  # vertical
-                if wt == "exterior":
-                    if pos == "left":
-                        midline = ((ex1 + (thick(wt) - wall_t_int) / 2, ey1 - half_t), (ex2 + (thick(wt) - wall_t_int) / 2, ey2 + half_t))
-                        normal = (-1, 0)
-                    else:  # right
-                        midline = ((ex1 - (thick(wt) - wall_t_int) / 2, ey1 - half_t), (ex2 - (thick(wt) - wall_t_int) / 2, ey2 + half_t))
-                        normal = (1, 0)
-                else:
-                    if pos == "left":
-                        midline = ((ex1 + half_int, ey1 - half_t), (ex2 + half_int, ey2 + half_t))
-                        normal = (-1, 0)
-                    else:
-                        midline = ((ex1 - half_int, ey1 - half_t), (ex2 - half_int, ey2 + half_t))
-                        normal = (1, 0)
-
-            w_entry = {"midline": midline, "normal": normal, "wall_type": wt, "thickness": thick(wt)}
-            all_wall_info.append(w_entry)
-            all_wall_midlines.append(midline)
-
-    return all_rooms, all_wall_info, all_wall_midlines, all_room_types
-
-
-def _bsp_apartment(
-    ax1: float, ay1: float, ax2: float, ay2: float, wall_t: float
-) -> Tuple[List[Polygon], List[dict]]:
-    """BSP-разбиение внутри квартиры. Возвращает (rooms, wall_info)."""
-    half_t = wall_t / 2.0
-    num_rooms = random.randint(2, 5)
-    min_room = 100
-
-    parts: List[Tuple[float, float, float, float]] = [
-        (ax1 + half_t, ay1 + half_t, ax2 - half_t, ay2 - half_t)
-    ]
-
-    while len(parts) < num_rooms:
-        candidates = []
-        for i, (rx1, ry1, rx2, ry2) in enumerate(parts):
-            w, h = rx2 - rx1, ry2 - ry1
-            min_dim = min_room * 2 + wall_t
-            if w > min_dim or h > min_dim:
-                candidates.append(i)
-        if not candidates:
-            break
-        idx = random.choice(candidates)
-        rx1, ry1, rx2, ry2 = parts[idx]
-        w, h = rx2 - rx1, ry2 - ry1
-
-        split_ok = False
-        if w > h * 1.2:
-            dirs = ["v", "h"]
-        elif h > w * 1.2:
-            dirs = ["h", "v"]
-        else:
-            dirs = ["v", "h"] if random.random() < 0.5 else ["h", "v"]
-
-        for d in dirs:
-            if d == "v":
-                lo = int(rx1 + min_room + half_t)
-                hi = int(rx2 - min_room - half_t)
-            else:
-                lo = int(ry1 + min_room + half_t)
-                hi = int(ry2 - min_room - half_t)
-            if lo >= hi:
-                continue
-            split = random.randint(lo, hi)
-            if d == "v":
-                a = (rx1, ry1, split - half_t, ry2)
-                b = (split + half_t, ry1, rx2, ry2)
-            else:
-                a = (rx1, ry1, rx2, split - half_t)
-                b = (rx1, split + half_t, rx2, ry2)
-            parts.pop(idx)
-            parts.append(a)
-            parts.append(b)
-            split_ok = True
-            break
-        if not split_ok:
-            break
-
-    rooms = [box(rx1, ry1, rx2, ry2) for rx1, ry1, rx2, ry2 in parts]
-
-    # Стены (midlines)
-    edges: dict = {}
-    for rx1, ry1, rx2, ry2 in parts:
-        edge_list = [
-            ("h", rx1, ry1, rx2, ry1),
-            ("h", rx1, ry2, rx2, ry2),
-            ("v", rx1, ry1, rx1, ry2),
-            ("v", rx2, ry1, rx2, ry2),
-        ]
-        for etype, ex1, ey1, ex2, ey2 in edge_list:
-            key = (etype, round(min(ex1, ex2), 6), round(min(ey1, ey2), 6),
-                   round(max(ex1, ex2), 6), round(max(ey1, ey2), 6))
-            edges[key] = edges.get(key, 0) + 1
-
-    wall_info = []
-    for (etype, ex1, ey1, ex2, ey2), count in edges.items():
-        ext = wall_t
-        if etype == "h":
-            if count >= 2:
-                midline = ((ex1 - ext, ey1), (ex2 + ext, ey1))
-                normal = (0, -1)
-            else:
-                is_top = any(abs(ey1 - ry1) < 1 for _, ry1, _, _ in parts)
-                if is_top:
-                    midline = ((ex1 - ext, ey1 - half_t), (ex2 + ext, ey1 - half_t))
-                    normal = (0, -1)
-                else:
-                    midline = ((ex1 - ext, ey1 + half_t), (ex2 + ext, ey1 + half_t))
-                    normal = (0, 1)
-        else:
-            if count >= 2:
-                midline = ((ex1, ey1 - ext), (ex2, ey2 + ext))
-                normal = (-1, 0)
-            else:
-                is_left = any(abs(ex1 - rx1) < 1 for rx1, _, _, _ in parts)
-                if is_left:
-                    midline = ((ex1 - half_t, ey1 - ext), (ex1 - half_t, ey2 + ext))
-                    normal = (-1, 0)
-                else:
-                    midline = ((ex1 + half_t, ey1 - ext), (ex1 + half_t, ey2 + ext))
-                    normal = (1, 0)
-
-        length = math.hypot(midline[1][0] - midline[0][0], midline[1][1] - midline[0][1])
-        if length > 50:
-            wall_info.append({"midline": midline, "normal": normal})
-
-    return rooms, wall_info
 
 
 def compute_variable_wall_polygon(
