@@ -25,8 +25,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module="shapely")
 # =============================================================================
 # ПАРАМЕТРЫ
 # =============================================================================
-NUM_IMAGES = 100
-SEED = 42
+
 NUM_IMAGES = 10
 MIN_CANVAS = 1200
 MAX_CANVAS = 2500
@@ -1510,7 +1509,6 @@ def draw_mask(
     *,
     show_dimensions: bool = False,
     show_labels: bool = False,
-
 ) -> None:
     """Нарисовать маску (цвета M_ROOM/M_WALL/M_WALL_HATCH/M_DOOR/M_DOORW/M_WIND/M_WINDW)."""
     draw = ImageDraw.Draw(mask)
