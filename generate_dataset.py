@@ -16,7 +16,7 @@ import warnings
 from typing import List, Tuple, Optional, Dict, Set
 
 from PIL import Image, ImageDraw, ImageFont
-from shapely.geometry import Polygon, LineString, Point, box, MultiPolygon, JOIN_STYLE
+from shapely.geometry import Polygon, LineString, Point, box, MultiPolygon
 from shapely.ops import unary_union
 from tqdm import tqdm
 
@@ -26,7 +26,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module="shapely")
 # ПАРАМЕТРЫ
 # =============================================================================
 
-NUM_IMAGES = 10
+NUM_IMAGES = 4900
 MIN_CANVAS = 1200
 MAX_CANVAS = 2500
 WALL_T_MIN = 12
@@ -1250,7 +1250,6 @@ def draw_handwriting(
 ) -> bool:
     """Нанести случайные рукописные пометки на план.
     Возвращает True, если хотя бы одна надпись была размещена."""
-    import random
     num_labels = random.randint(2, 5)
     margin = 40
     placed = 0
@@ -1262,7 +1261,7 @@ def draw_handwriting(
         text = random.choice(_HANDWRITING_TEXTS)
         font_size = random.randint(20, 32)
         try:
-            font = ImageFont.truetype(_handwriting_font.font.path, font_size)
+            font = ImageFont.truetype(_handwriting_font.path, font_size)
         except Exception:
             font = _handwriting_font
 
@@ -1524,6 +1523,10 @@ def draw_mask(
     for room in rooms:
         draw_shapely_poly(draw, room, fill=M_ROOM, outline=None)
 
+    # Вычисляем union комнат и полигон стен для проверок ниже
+    room_union = unary_union(rooms) if len(rooms) > 1 else rooms[0]
+    wall_poly = compute_variable_wall_polygon(wall_info)
+
     # 3.5 Несущие стены — перерисовка оранжевым (M_WALL_HATCH) поверх жёлтого M_WALL
     for region in lb_regions:
         draw_shapely_poly(draw, region, fill=M_WALL_HATCH, outline=None)
@@ -1538,7 +1541,6 @@ def draw_mask(
             continue
         draw.polygon(rect, fill=M_DOORW if op.type == "door" else M_WINDW)
         if op.type == "door":
-            draw.polygon(rect, fill=M_DOORW)
             wx = op.wall_p2[0] - op.wall_p1[0]
             wy = op.wall_p2[1] - op.wall_p1[1]
             wlen = math.hypot(wx, wy)
